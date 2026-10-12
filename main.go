@@ -859,8 +859,10 @@ func calibrate(nodes []string) {
   tokenPool := newIPInfoTokenPool(valid)
   for i:=0;i<workers;i++ {wg.Add(1);go func(){defer wg.Done();for ip:=range jobs {tag:=queryIPInfo(ip,tokenPool);results<-result{ip,tag}}}()}
   go func(){for _,ip:=range ips{jobs<-ip};close(jobs);wg.Wait();close(results)}()
-  for r:=range results {atomic.AddInt64(&done,1);if r.tag!=""{for _,ipp:=range ipports[r.ip]{cache[ipp]=r.tag}};logf("\r[%d/%d] 地区校准...",atomic.LoadInt64(&done),len(ips))}
+  successCount := 0
+  for r:=range results {atomic.AddInt64(&done,1);if r.tag!=""{successCount++;for _,ipp:=range ipports[r.ip]{cache[ipp]=r.tag}};logf("\r[%d/%d] 地区校准...",atomic.LoadInt64(&done),len(ips))}
   logf("\n")
+  if len(ips) > 0 && successCount == 0 { logf("警告：所有 IP 地区校准失败，可能所有 token 均已失效。\n"); notify("IP地区校准：所有IP查询均失败，可能所有token均已失效。", "IP校准全失败") }
  }
  for i,n:=range nodes {ipp:=strings.SplitN(n,"#",2)[0];if tag:=cache[ipp];tag!=""{nodes[i]=ipp+"#"+strings.Fields(tag)[0]}}
  writeCache(cachePath,cache)
@@ -887,7 +889,7 @@ func availability(node string) AvailabilityResult {
  maxAttempts:=1;if boolean("AVAILABILITY_INNER_RETRY_ENABLED"){maxAttempts+=integer("AVAILABILITY_INNER_RETRY_MAX")}
  for i:=0;i<maxAttempts;i++ {u,_:=url.Parse(str("AVAILABILITY_CHECK_API"));q:=u.Query();q.Set("proxyip",m[1]+":"+m[2]);u.RawQuery=q.Encode()
   resp,b,e:=request("GET",u.String(),nil,nil,duration("AVAILABILITY_CONNECT_TIMEOUT",3),duration("AVAILABILITY_TIMEOUT",3))
-  if e==nil&&resp.StatusCode==200 {var d map[string]any;_ = json.Unmarshal(b,&d);if d["success"]==true {stack:=fmt.Sprint(d["inferred_stack"]);if stack=="<nil>"{stack="unknown"};var probe map[string]any;if p,ok:=d["probe_results"].(map[string]any);ok {probe,_=p["ipv6"].(map[string]any);if probe==nil{probe,_=p["ipv4"].(map[string]any)}};exit,_:=probe["exit"].(map[string]any);return AvailabilityResult{node,true,stack,exit}}}
+  if e==nil&&resp.StatusCode==200 {var d map[string]any;_ = json.Unmarshal(b,&d);if d["success"]==true {stack:=fmt.Sprint(d["inferred_stack"]);if stack=="<nil>"{stack="unknown"};var probe map[string]any;if p,ok:=d["probe_results"].(map[string]any);ok {probe,_=p["ipv6"].(map[string]any);if len(probe)==0{probe,_=p["ipv4"].(map[string]any)}};exit,_:=probe["exit"].(map[string]any);return AvailabilityResult{node,true,stack,exit}}}
   if i<maxAttempts-1{sleepSec("AVAILABILITY_INNER_RETRY_DELAY")}
  }
  return AvailabilityResult{Node:node,OK:false,Stack:"unknown"}
