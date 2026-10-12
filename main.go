@@ -1020,6 +1020,8 @@ func syncGitHub() {
   logf("未找到 %s，跳过 GitHub 同步。\\n", scriptName)
   return
  }
+ scriptData, _ := os.ReadFile(scriptPath)
+ syncToken := syncSetting(string(scriptData), "github_token")
  if runtime.GOOS != "windows" {
   _ = os.Chmod(scriptPath, 0755)
  }
@@ -1035,7 +1037,11 @@ func syncGitHub() {
   output, err := cmd.CombinedOutput()
   timedOut := ctx.Err() == context.DeadlineExceeded
   cancel()
-  if len(output) > 0 { logf("%s", string(output)) }
+  if len(output) > 0 {
+   outputText := string(output)
+   if syncToken != "" { outputText = strings.ReplaceAll(outputText, syncToken, "***") }
+   logf("%s", outputText)
+  }
   if err == nil {
    logf("已自动推送到 GitHub。\\n")
    return
