@@ -82,3 +82,13 @@ func TestSyncSettingReadsShellAndPowerShell(t *testing.T) {
   }
  }
 }
+
+func TestLoadConfigUsesDefaultsWhenMissing(t *testing.T) {
+ oldRoot, oldConfig := root, cfg
+ root = t.TempDir()
+ cfg = nil
+ defer func() { root, cfg = oldRoot, oldConfig }()
+ if err := loadConfig(); err != nil { t.Fatalf("loadConfig() error = %v", err) }
+ if got := integer("GLOBAL_TOP_N"); got != 15 { t.Fatalf("GLOBAL_TOP_N = %d, want 15", got) }
+ if got := str("OUTPUT_FILE"); got != "ip.txt" { t.Fatalf("OUTPUT_FILE = %q, want ip.txt", got) }
+}

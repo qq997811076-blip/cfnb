@@ -560,8 +560,14 @@ func duration(k string, fallback float64) time.Duration { n:=number(k); if n<=0 
 func logf(format string,args ...any) { muLog.Lock(); defer muLog.Unlock(); line:=fmt.Sprintf(format,args...); fmt.Print(line); if boolean("ENABLE_LOGGING") { f,e:=os.OpenFile(filepath.Join(root,str("LOG_FILE")),os.O_CREATE|os.O_APPEND|os.O_WRONLY,0644); if e==nil { _,_=f.WriteString(line); f.Close() } } }
 func loadConfig() error {
  p:=filepath.Join(root,"config.json")
- b,e:=os.ReadFile(p); if e!=nil {return fmt.Errorf("读取 config.json 失败: %w",e)}
- if e=json.Unmarshal(b,&cfg);e!=nil{return fmt.Errorf("config.json 格式错误: %w",e)}
+ b,e:=os.ReadFile(p)
+ if e!=nil {
+  if errors.Is(e, os.ErrNotExist) {
+   logf("未找到配置文件 %s，将使用内置默认配置运行。\n", p)
+   logf("你可根据需要创建 config.json 文件（参考文档），程序会自动识别。\n")
+   cfg = Config{}
+  } else { return fmt.Errorf("读取 config.json 失败: %w", e) }
+ } else if e=json.Unmarshal(b,&cfg);e!=nil { return fmt.Errorf("config.json 格式错误: %w",e) }
  // 保留原配置中的所有键和所有值；只为缺少的键补上与原脚本相同的默认值。
  defaults:=map[string]any{
  "USE_GLOBAL_MODE":true,"GLOBAL_TOP_N":15,"PER_COUNTRY_TOP_N":1,"BANDWIDTH_CANDIDATES":150,"TCP_PROBES":1,"MIN_SUCCESS_RATE":1.0,"TCP_LATENCY_WEIGHT":0.0,"TIMEOUT":2.0,"SOCKET_DEFAULT_TIMEOUT":3,"PROGRESS_PRINT_INTERVAL":1,
