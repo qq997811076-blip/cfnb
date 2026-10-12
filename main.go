@@ -996,20 +996,73 @@ func httpTest(node string) HTTPResult {
  return HTTPResult{Node:node,OK:true,Server:"cloudflare",Latency:maxlat,Jitter:math.Sqrt(variance)}
 }
 func bandwidth(node string) BWResult {
- m:=ipPortPattern.FindStringSubmatch(node);if len(m)!=3{return BWResult{Node:node}}
- port,_:=strconv.Atoi(m[2]);scheme:="https";insecure:=[]string{"--insecure"}
- httpPorts:=map[int]bool{80:true,8080:true,8880:true,2052:true,2082:true,2086:true,2095:true}
- if httpPorts[port]{scheme="http";insecure=nil}
- bytesN:=int(number("BANDWIDTH_SIZE_MB")*1024*1024);template:=str("BANDWIDTH_URL_TEMPLATE")
- replacer:=strings.NewReplacer("{scheme}",scheme,"{port}",m[2],"{bytes}",strconv.Itoa(bytesN));target:=replacer.Replace(template)
- args:=[]string{"-s","-o",os.DevNull,"-w","%{size_download} %{time_starttransfer} %{time_total}","-L","-H","User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36","--http2","--noproxy","*","--resolve","speed.cloudflare.com:"+m[2]+":"+m[1],"--connect-timeout",fmt.Sprint(number("BANDWIDTH_CONNECT_TIMEOUT")),"--max-time",fmt.Sprint(number("BANDWIDTH_TIMEOUT"))}
- args=append(args,insecure...);args=append(args,target)
- ctx,cancel:=context.WithTimeout(context.Background(),duration("BANDWIDTH_TIMEOUT",3)+duration("BANDWIDTH_PROCESS_BUFFER",2));defer cancel()
- cmd:=exec.CommandContext(ctx,"curl",args...);out,e:=cmd.Output();if e!=nil{return BWResult{Node:node}}
- p:=strings.Fields(string(out));if len(p)<3{return BWResult{Node:node}}
- size,_:=strconv.ParseFloat(p[0],64);total,_:=strconv.ParseFloat(p[2],64)
- if size<float64(bytesN)||total<=0{return BWResult{Node:node}}
- return BWResult{Node:node,Speed:size*8/(total*1e6)}
+	m := ipPortPattern.FindStringSubmatch(node)
+	if len(m) != 3 {
+		return BWResult{Node: node}
+	}
+	singleIP := m[1]
+
+	// 固定使用 speed.cloudflare.com:443；候选节点 IP 只用于 TCP 连接目标。
+	bytesN := 104857600
+	target := fmt.Sprintf("https://speed.cloudflare.com:443/__down?bytes=%d", bytesN)
+	globalTimeout := duration("BANDWIDTH_TIMEOUT", 3)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	dialContext := func(ctxCtx context.Context, network, addr string) (net.Conn, error) {
+		dialer := &net.Dialer{Timeout: 5 * time.Second}
+		return dialer.DialContext(ctxCtx, "tcp", net.JoinHostPort(singleIP, "443"))
+	}
+
+	transportHTTPS := &http.Transport{
+		TLSClientConfig:    &tls.Config{InsecureSkipVerify: true},
+		MaxIdleConns:       max(1, integer("BANDWIDTH_WORKERS")) * 2,
+		IdleConnTimeout:    30 * time.Second,
+		DisableCompression: true,
+		DialContext:        dialContext,
+	}
+	defer transportHTTPS.CloseIdleConnections()
+
+	client := &http.Client{
+		Timeout:   globalTimeout,
+		Transport: transportHTTPS,
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return BWResult{Node: node}
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Range", "bytes=0-104857600")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return BWResult{Node: node}
+	}
+	defer resp.Body.Close()
+
+	start := time.Now()
+	totalBytes := int64(0)
+	buf := make([]byte, 4096)
+	for time.Since(start) < globalTimeout {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			totalBytes += int64(n)
+		}
+		if readErr != nil {
+			break
+		}
+	}
+
+	used := time.Since(start).Seconds()
+	if used <= 0 || totalBytes <= 0 {
+		return BWResult{Node: node}
+	}
+
+	// 参考代码计算 MiB/s；原项目后续排序和输出使用 Mbps，因此在此转换单位。
+	speedMbps := float64(totalBytes) / used / 1024 / 1024 * 8
+	return BWResult{Node: node, Speed: speedMbps}
 }
 func writeIP(nodes []string,speed,lat,httpLat,jitter map[string]float64) error {
  var b strings.Builder
