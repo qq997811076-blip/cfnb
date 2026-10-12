@@ -613,12 +613,14 @@ var httpClientMu sync.Mutex
 var httpClients = map[string]*http.Client{}
 
 func newHTTPClient(connect, read time.Duration) *http.Client {
- key := connect.String() + "/" + read.String() + "/" + strconv.FormatBool(boolean("FORCE_DIRECT"))
+ return newHTTPClientWithProxy(connect, read, !boolean("FORCE_DIRECT"))
+}
+
+func newHTTPClientWithProxy(connect, read time.Duration, useProxy bool) *http.Client {
+ key := connect.String() + "/" + read.String() + "/proxy=" + strconv.FormatBool(useProxy)
  httpClientMu.Lock()
  defer httpClientMu.Unlock()
- if client := httpClients[key]; client != nil {
-  return client
- }
+ if client := httpClients[key]; client != nil { return client }
  tr := &http.Transport{
   DialContext: (&net.Dialer{Timeout: connect, KeepAlive: 30 * time.Second}).DialContext,
   TLSHandshakeTimeout: connect,
@@ -628,9 +630,7 @@ func newHTTPClient(connect, read time.Duration) *http.Client {
   MaxIdleConnsPerHost: 64,
   TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
  }
- if !boolean("FORCE_DIRECT") {
-  tr.Proxy = http.ProxyFromEnvironment
- }
+ if useProxy { tr.Proxy = http.ProxyFromEnvironment }
  client := &http.Client{Transport: tr, Timeout: connect + read + 2*time.Second}
  httpClients[key] = client
  return client
@@ -645,7 +645,8 @@ func requestNoRedirect(method, target string, headers map[string]string, body []
  req, err := http.NewRequest(method, target, bytes.NewReader(body))
  if err != nil { return nil, nil, err }
  for key, value := range headers { req.Header.Set(key, value) }
- client := *newHTTPClient(connect, read)
+ // Python's HTTP verification passes explicit empty proxies, so this probe must bypass env proxies.
+ client := *newHTTPClientWithProxy(connect, read, false)
  client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
  resp, err := client.Do(req)
  if err != nil { return nil, nil, err }
