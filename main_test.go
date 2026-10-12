@@ -59,10 +59,10 @@ func TestExtractCountryCode(t *testing.T) {
  }
 }
 
-func TestApplyCachedTagsPreservesFullLabel(t *testing.T) {
+func TestApplyCachedTagsUsesCountryOnly(t *testing.T) {
  nodes := []string{"192.0.2.1:443#US"}
  applyCachedTags(nodes, map[string]string{"192.0.2.1:443": "US California Los Angeles AS123 Example ISP"})
- want := []string{"192.0.2.1:443#US California Los Angeles AS123 Example ISP"}
+ want := []string{"192.0.2.1:443#US"}
  if !reflect.DeepEqual(nodes, want) {
   t.Fatalf("applyCachedTags() = %#v, want %#v", nodes, want)
  }

@@ -878,7 +878,11 @@ func applyCachedTags(nodes []string, cache map[string]string) {
  for i, node := range nodes {
   ipPort := strings.SplitN(node, "#", 2)[0]
   if tag := strings.TrimSpace(cache[ipPort]); tag != "" {
-   nodes[i] = ipPort + "#" + tag
+   // Match Python: retain full region details in cache, but use only country code in node labels.
+   fields := strings.Fields(tag)
+   if len(fields) > 0 {
+    nodes[i] = ipPort + "#" + fields[0]
+   }
   }
  }
 }
@@ -933,7 +937,7 @@ func calibrate(nodes []string) {
   if cacheAppend != nil { _ = cacheAppend.Close() }
   if len(ips) > 0 && successCount == 0 { logf("警告：所有 IP 地区校准失败，可能所有 token 均已失效。\n"); notify("IP地区校准：所有IP查询均失败，可能所有token均已失效。", "IP校准全失败") }
  }
- for i,n:=range nodes {ipp:=strings.SplitN(n,"#",2)[0];if tag:=strings.TrimSpace(cache[ipp]);tag!=""{nodes[i]=ipp+"#"+tag}}
+ for i,n:=range nodes {ipp:=strings.SplitN(n,"#",2)[0];if tag:=strings.TrimSpace(cache[ipp]);tag!=""{fields:=strings.Fields(tag);if len(fields)>0{nodes[i]=ipp+"#"+fields[0]}}}
  writeCache(cachePath,cache)
 }
 func tcpTest(node string) (NodeResult,bool) {
