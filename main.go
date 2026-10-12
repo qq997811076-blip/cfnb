@@ -574,10 +574,31 @@ func loadConfig() error {
  for c:=range cnToCode { _=c }; for _,c:=range cnToCode {codeSet[c]=true}
  return nil
 }
+var httpClientMu sync.Mutex
+var httpClients = map[string]*http.Client{}
+
 func newHTTPClient(connect, read time.Duration) *http.Client {
- tr:=&http.Transport{DialContext:(&net.Dialer{Timeout:connect,KeepAlive:30*time.Second}).DialContext, TLSHandshakeTimeout:connect, ResponseHeaderTimeout:read, IdleConnTimeout:30*time.Second, MaxIdleConns:128, MaxIdleConnsPerHost:64}
- if !boolean("FORCE_DIRECT") { tr.Proxy=http.ProxyFromEnvironment }
- return &http.Client{Transport:tr,Timeout:connect+read+2*time.Second}
+ key := connect.String() + "/" + read.String() + "/" + strconv.FormatBool(boolean("FORCE_DIRECT"))
+ httpClientMu.Lock()
+ defer httpClientMu.Unlock()
+ if client := httpClients[key]; client != nil {
+  return client
+ }
+ tr := &http.Transport{
+  DialContext: (&net.Dialer{Timeout: connect, KeepAlive: 30 * time.Second}).DialContext,
+  TLSHandshakeTimeout: connect,
+  ResponseHeaderTimeout: read,
+  IdleConnTimeout: 30 * time.Second,
+  MaxIdleConns: 128,
+  MaxIdleConnsPerHost: 64,
+  TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+ }
+ if !boolean("FORCE_DIRECT") {
+  tr.Proxy = http.ProxyFromEnvironment
+ }
+ client := &http.Client{Transport: tr, Timeout: connect + read + 2*time.Second}
+ httpClients[key] = client
+ return client
 }
 func request(method, target string, headers map[string]string, body []byte, connect, read time.Duration) (*http.Response,[]byte,error) {
  req,e:=http.NewRequest(method,target,bytes.NewReader(body));if e!=nil{return nil,nil,e}
@@ -683,8 +704,20 @@ func calibrate(nodes []string) {
  tokenPath:=filepath.Join(root,str("IP_CALIBRATION_TOKEN_FILE"));cachePath:=filepath.Join(root,str("IP_CALIBRATION_CACHE_FILE"));cache:=readCache(cachePath)
  for i,n:=range nodes {ipp:=strings.SplitN(n,"#",2)[0];if tag:=cache[ipp];tag!=""{nodes[i]=ipp+"#"+strings.Fields(tag)[0]}}
  tokens:=loadLines(tokenPath);if len(tokens)==0{logf("valid_tokens.txt 为空，IP 地区校准跳过。\n");return}
- logf("正在进行 token 有效性校验...\n");valid:=[]string{}
- for i,t:=range tokens {u:="https://ipinfo.io/json?token="+url.QueryEscape(t);resp,b,e:=request("GET",u,nil,nil,5*time.Second,5*time.Second);if e==nil&&resp.StatusCode==200{var d map[string]any;_ = json.Unmarshal(b,&d);if fmt.Sprint(d["country"])!=""&&fmt.Sprint(d["country"])!="<nil>"{valid=append(valid,t)}};if (i+1)%max(1,integer("IP_CALIBRATION_CONCURRENCY"))==0 {break}}
+ logf("正在进行 token 有效性校验...\\n")
+ workers := integer("IP_CALIBRATION_CONCURRENCY")
+ if workers < 1 { workers = 1 }
+ tokenOK := runPool(tokens, workers, func(t string) bool {
+  u := "https://ipinfo.io/json?token=" + url.QueryEscape(t)
+  resp, b, e := request("GET", u, nil, nil, 5*time.Second, 5*time.Second)
+  if e != nil || resp.StatusCode != http.StatusOK { return false }
+  var d map[string]any
+  if json.Unmarshal(b, &d) != nil { return false }
+  country, _ := d["country"].(string)
+  return country != ""
+ }, "Token 校验")
+ valid := make([]string, 0, len(tokens))
+ for i, ok := range tokenOK { if ok { valid = append(valid, tokens[i]) } }
  if len(valid)==0 {logf("所有 token 均已失效，地区校准跳过。\n");notify("IP地区校准：所有token均已失效，本次校准跳过。","IP校准 Token 耗尽");return}
  logf("有效 token 数量: %d\n",len(valid))
  // Query unique uncached IPs using a bounded worker pool; token rotation avoids serially waiting on one IP.
