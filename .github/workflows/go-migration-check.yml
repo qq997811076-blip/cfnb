@@ -21,7 +21,7 @@ jobs:
           go-version: '1.22.x'
           cache: false
       - name: Format Go source
-        run: test -z "$(gofmt -l main.go)"
+        run: gofmt -w main.go
       - name: Test compile
         run: go test ./...
       - name: Build executable
