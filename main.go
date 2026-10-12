@@ -920,7 +920,7 @@ func runPool[T any](items []string, workers int, fn func(string)T, progress stri
  for i:=0;i<workers;i++ {wg.Add(1);go func(){defer wg.Done();for idx:=range jobs {results<-pair{idx,fn(items[idx])};atomic.AddInt64(&done,1)}}()}
  go func(){for i:=range items{jobs<-i};close(jobs);wg.Wait();close(results)}()
  out:=make([]T,len(items));last:=time.Now()
- for r:=range results {out[r.idx]=r.value;if time.Since(last)>=time.Duration(max(1,integer("PROGRESS_PRINT_INTERVAL")))*time.Second||atomic.LoadInt64(&done)==int64(len(items)){logf("\r[%s] 进度：%d/%d (%.1f%%)\n",progress,atomic.LoadInt64(&done),len(items),float64(atomic.LoadInt64(&done))*100/float64(max(1,len(items))));last=time.Now()}}
+ for r:=range results {out[r.idx]=r.value;if integer("PROGRESS_PRINT_INTERVAL")<=0||time.Since(last)>=time.Duration(integer("PROGRESS_PRINT_INTERVAL"))*time.Second||atomic.LoadInt64(&done)==int64(len(items)){logf("\r[%s] 进度：%d/%d (%.1f%%)\n",progress,atomic.LoadInt64(&done),len(items),float64(atomic.LoadInt64(&done))*100/float64(max(1,len(items))));last=time.Now()}}
  return out
 }
 func availability(node string) AvailabilityResult {
@@ -1197,7 +1197,8 @@ func main() {
  nodes:=fetchSources();if len(nodes)==0{logf("没有获取到任何有效节点，退出。\n");return}
  calibrate(nodes)
  if boolean("PRE_FILTER_PORT_ENABLED"){allowed:=map[string]bool{};for _,v:=range stringsVal("PRE_FILTER_PORTS"){allowed[fmt.Sprint(v)]=true};before:=len(nodes);out:=[]string{};for _,n:=range nodes{m:=ipPortPattern.FindStringSubmatch(n);if len(m)==3&&allowed[m[2]]{out=append(out,n)}};nodes=out;logf("前置端口过滤：%d -> %d 个节点\n",before,len(nodes))}
- if boolean("PRE_FILTER_BLOCKED_ENABLED"){blocked:=map[string]bool{};for _,v:=range stringsVal("PRE_FILTER_BLOCKED_COUNTRIES"){blocked[strings.ToUpper(v)]=true};before:=len(nodes);out:=[]string{};for _,n:=range nodes{p:=strings.SplitN(n,"#",2);if len(p)==2&&!blocked[strings.ToUpper(strings.Fields(p[1])[0])]{out=append(out,n)}};nodes=out;logf("前置黑名单过滤：%d -> %d 个节点\n",before,len(nodes))}
+ if boolean("PRE_FILTER_BLOCKED_ENABLED"){blocked:=map[string]bool{};for _,v:=range stringsVal("PRE_FILTER_BLOCKED_COUNTRIES"){blocked[strings.ToUpper(v)]=true};before:=len(nodes);out:=[]string{};for _,n:=range nodes{p:=strings.SplitN(n,"#",2);country:="";if len(p)==2{fields:=strings.Fields(p[1]);if len(fields)>0{country=fields[0]}}
+    if !blocked[strings.ToUpper(country)]{out=append(out,n)}};nodes=out;logf("前置黑名单过滤：%d -> %d 个节点\n",before,len(nodes))}
  if boolean("FILTER_COUNTRIES_ENABLED") && len(stringsVal("ALLOWED_COUNTRIES")) > 0 {allow:=map[string]bool{};for _,c:=range stringsVal("ALLOWED_COUNTRIES"){allow[strings.ToUpper(c)]=true};out:=[]string{};for _,n:=range nodes{p:=strings.SplitN(n,"#",2);if len(p)==2&&allow[strings.ToUpper(strings.Fields(p[1])[0])]{out=append(out,n)}};nodes=out;logf("国家白名单过滤后剩余 %d 个节点\n",len(nodes))}
  if len(nodes)==0{logf("过滤后无任何节点，退出。\n");return}
  logf("开始 TCP 连接测试（超时 %gs，并发 %d）...\n",number("TIMEOUT"),integer("MAX_WORKERS"))
@@ -1238,7 +1239,8 @@ func main() {
   } else {
    count:=map[string]int{}
    for _,r:=range bw {
-    country:="";p:=strings.SplitN(r.Node,"#",2);if len(p)==2{country=strings.Fields(p[1])[0]}
+    // Python 原版按 # 后面的完整标签分组（不只按国家代码），这里保持相同语义。
+    country:="";p:=strings.SplitN(r.Node,"#",2);if len(p)==2{country=p[1]}
     if country!=""&&count[country]<integer("PER_COUNTRY_TOP_N"){selected=append(selected,r.Node);count[country]++}
    }
    sort.SliceStable(selected,func(i,j int)bool{return score[selected[i]]>score[selected[j]]})
