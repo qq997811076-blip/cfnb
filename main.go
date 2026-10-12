@@ -803,21 +803,24 @@ func queryIPInfo(ip string, pool *ipInfoTokenPool) string {
   if resp.StatusCode < 200 || resp.StatusCode >= 300 { pool.cool(idx, 300*time.Millisecond, false); continue }
   var data map[string]any
   if json.Unmarshal(body, &data) != nil { pool.cool(idx, 300*time.Millisecond, false); continue }
-  country, _ := data["country"].(string)
-  if country == "" { continue }
   pool.markSuccess(idx)
+  country, _ := data["country"].(string)
+  if country == "" || country == "Unknown" { continue }
   parts := []string{country}
   for _, key := range []string{"region", "city"} {
-   if value, ok := data[key].(string); ok && strings.TrimSpace(value) != "" { parts = append(parts, strings.TrimSpace(value)) }
+   if value, ok := data[key].(string); ok && strings.TrimSpace(value) != "" && value != "Unknown" { parts = append(parts, strings.TrimSpace(value)) }
   }
   org, _ := data["org"].(string)
-  asn, isp := "Unknown", org
+  asn, isp := "Unknown", "Unknown"
   if strings.HasPrefix(org, "AS") {
    fields := strings.Fields(org)
-   if len(fields) > 0 { asn = fields[0]; isp = strings.TrimSpace(strings.TrimPrefix(org, fields[0])) }
+   if len(fields) > 0 { asn = fields[0] }
+   if strings.Contains(org, " ") { isp = strings.TrimSpace(strings.SplitN(org, " ", 2)[1]) } else { isp = org }
+  } else if org != "" && org != "Unknown" {
+   isp = org
   }
   if asn != "Unknown" { parts = append(parts, asn) }
-  if isp != "" { parts = append(parts, isp) }
+  if isp != "Unknown" { parts = append(parts, isp) }
   return strings.Join(parts, " ")
  }
  return ""
