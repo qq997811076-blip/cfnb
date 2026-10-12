@@ -1,0 +1,28 @@
+name: Go migration check
+on:
+  push:
+    branches:
+      - go-full-migration
+  workflow_dispatch:
+
+concurrency:
+  group: cfnb-go-full-migration-check
+  cancel-in-progress: false
+
+jobs:
+  go-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.x'
+          cache: false
+      - name: Format Go source
+        run: test -z "$(gofmt -l main.go)"
+      - name: Test compile
+        run: go test ./...
+      - name: Build executable
+        run: go build -o cfnb .
