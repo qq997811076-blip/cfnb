@@ -43,7 +43,11 @@ func TestExtractCountryCode(t *testing.T) {
  tests := []struct{ label, want string }{
   {"US", "US"},
   {"USA", "US"},
+  {"USA123", "US"},
+  {"USABC", ""},
   {"日本", "JP"},
+  {"🇺🇸", "US"},
+  {"🇺🇸🇨", ""},
  }
  for _, test := range tests {
   if got := extractCountryCode(test.label); got != test.want {
