@@ -1071,7 +1071,16 @@ func updateDNS(nodes []string, bw []BWResult, av map[string]AvailabilityResult, 
  content := []string{}
  seen := map[string]bool{}
  riskFallback := []string{}
- for _, item := range bw {
+ // Python 原版仅在可用性检测至少筛出一个节点、ip_info 非空时，
+ // 才使用完整带宽结果构建 DNS 列表；否则 A 记录回退到最终 ip.txt，
+ // TXT 因缺少可用的 IP:端口候选而跳过。
+ hasAvailabilityInfo := false
+ for _, result := range av {
+  if result.OK { hasAvailabilityInfo = true; break }
+ }
+ bwForDNS := bw
+ if !hasAvailabilityInfo { bwForDNS = nil }
+ for _, item := range bwForDNS {
   m := ipPortPattern.FindStringSubmatch(item.Node)
   if len(m) != 3 { continue }
   ip, port := m[1], m[2]
