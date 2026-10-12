@@ -58,6 +58,15 @@ func TestExtractCountryCode(t *testing.T) {
  }
 }
 
+func TestApplyCachedTagsPreservesFullLabel(t *testing.T) {
+ nodes := []string{"192.0.2.1:443#US"}
+ applyCachedTags(nodes, map[string]string{"192.0.2.1:443": "US California Los Angeles AS123 Example ISP"})
+ want := []string{"192.0.2.1:443#US California Los Angeles AS123 Example ISP"}
+ if !reflect.DeepEqual(nodes, want) {
+  t.Fatalf("applyCachedTags() = %#v, want %#v", nodes, want)
+ }
+}
+
 func TestWriteCacheSortsIPv4Numerically(t *testing.T) {
  path := t.TempDir() + "/cache.txt"
  writeCache(path, map[string]string{

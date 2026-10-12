@@ -874,10 +874,19 @@ func queryIPInfo(ip string, pool *ipInfoTokenPool) string {
  return ""
 }
 
+func applyCachedTags(nodes []string, cache map[string]string) {
+ for i, node := range nodes {
+  ipPort := strings.SplitN(node, "#", 2)[0]
+  if tag := strings.TrimSpace(cache[ipPort]); tag != "" {
+   nodes[i] = ipPort + "#" + tag
+  }
+ }
+}
+
 func calibrate(nodes []string) {
  if !boolean("IP_CALIBRATION_ENABLED"){logf("IP 地区校准已禁用，跳过。\n");return}
  tokenPath:=filepath.Join(root,str("IP_CALIBRATION_TOKEN_FILE"));cachePath:=filepath.Join(root,str("IP_CALIBRATION_CACHE_FILE"));cache:=readCache(cachePath)
- for i,n:=range nodes {ipp:=strings.SplitN(n,"#",2)[0];if tag:=strings.TrimSpace(cache[ipp]);tag!=""{nodes[i]=ipp+"#"+tag}}
+ applyCachedTags(nodes, cache)
  tokens:=loadLines(tokenPath);if len(tokens)==0{logf("valid_tokens.txt 为空，IP 地区校准跳过。\n");return}
  logf("正在进行 token 有效性校验...\n")
  workers := integer("IP_CALIBRATION_CONCURRENCY")
