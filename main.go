@@ -11,6 +11,7 @@ import (
  "errors"
  "fmt"
  "io"
+ "math"
  "net"
  "net/http"
  "net/url"
@@ -562,7 +563,7 @@ func loadConfig() error {
  "FILTER_COUNTRIES_ENABLED":false,"ALLOWED_COUNTRIES":[]any{"US"},"PRE_FILTER_BLOCKED_ENABLED":true,"PRE_FILTER_BLOCKED_COUNTRIES":[]any{"CN"},"PRE_FILTER_PORT_ENABLED":true,"PRE_FILTER_PORTS":[]any{443},
  "ENABLE_WXPUSHER":true,"WXPUSHER_APP_TOKEN":"your_app_token_here","WXPUSHER_UIDS":[]any{"your_uid_here"},"WXPUSHER_API_URL":"https://wxpusher.zjiecode.com/api/send/message","NOTIFY_TIMEOUT":3,"NOTIFY_CONNECT_TIMEOUT":3,
  "CF_ENABLED":true,"CF_API_TOKEN":"your_CF_API_TOKEN","CF_ZONE_ID":"your_CF_ZONE_ID","CF_DNS_RECORD_NAME":"your_CF_DNS_RECORD_NAME","CF_TTL":60,"CF_PROXIED":false,"CF_DNS_CONNECT_TIMEOUT":3,"CF_DNS_READ_TIMEOUT":3,"DNS_RECORD_TYPE":"TXT",
- "ADDITIONAL_SOURCES":[]any{},"FETCH_MAX_RETRIES":3,"FETCH_RETRY_DELAY":3,"FETCH_TIMEOUT":3,"FETCH_CONNECT_TIMEOUT":3,"IP_CALIBRATION_ENABLED":false,"TOKEN_FAILURE_THRESHOLD":3,"IP_CALIBRATION_MIN_INTERVAL":0.1,"IP_CALIBRATION_TOKEN_FILE":"valid_tokens.txt","IP_CALIBRATION_CACHE_FILE":"ipinfo_cache.txt","OUTPUT_FILE":"ip.txt","ENABLE_LOGGING":false,"LOG_FILE":"cfnb.log","FORCE_DIRECT":false,
+ "ADDITIONAL_SOURCES":[]any{map[string]any{"url":"https://zip.cm.edu.kg/all.txt","enabled":true},map[string]any{"url":"https://countrymerge.pages.dev/all.txt","enabled":true}},"FETCH_MAX_RETRIES":3,"FETCH_RETRY_DELAY":3,"FETCH_TIMEOUT":3,"FETCH_CONNECT_TIMEOUT":3,"IP_CALIBRATION_ENABLED":false,"TOKEN_FAILURE_THRESHOLD":3,"IP_CALIBRATION_MIN_INTERVAL":0.1,"IP_CALIBRATION_TOKEN_FILE":"valid_tokens.txt","IP_CALIBRATION_CACHE_FILE":"ipinfo_cache.txt","OUTPUT_FILE":"ip.txt","ENABLE_LOGGING":false,"LOG_FILE":"cfnb.log","FORCE_DIRECT":false,
  "TEST_AVAILABILITY":true,"AVAILABILITY_CHECK_API":"https://api.090227.xyz/check","AVAILABILITY_TIMEOUT":3,"AVAILABILITY_CONNECT_TIMEOUT":3,"AVAILABILITY_RETRY_MAX":2,"AVAILABILITY_RETRY_DELAY":3,"AVAILABILITY_INNER_RETRY_ENABLED":true,"AVAILABILITY_INNER_RETRY_MAX":2,"AVAILABILITY_INNER_RETRY_DELAY":3,
  "HTTP_TEST_ENABLED":true,"HTTP_TEST_TIMEOUT":3,"HTTP_TEST_CONNECT_TIMEOUT":3,"HTTP_TEST_MAX_ROUNDS":2,"HTTP_TEST_ROUND_DELAY":3,"HTTP_TEST_INNER_RETRY_ENABLED":true,"HTTP_TEST_MAX_RETRIES":2,"HTTP_TEST_RETRY_DELAY":3,"HTTP_TEST_METHOD":"HEAD","HTTP_LATENCY_WEIGHT":3.0,"JITTER_WEIGHT":3.0,"HTTP_JITTER_SAMPLES":3,
  "FILTER_IPV6_AVAILABILITY":true,"FILTER_BLOCKED_COUNTRIES_ENABLED":true,"BLOCKED_COUNTRIES":[]any{"BD","BI","BY","CD","CF","CN","CU","DE","ET","HK","IR","KP","LY","MO","NG","NL","PK","RU","SD","SO","SY","TH","TW","UA","VE","VN","YE","ZW"},
@@ -577,7 +578,7 @@ func loadConfig() error {
 func newHTTPClient(connect, read time.Duration) *http.Client {
  tr:=&http.Transport{DialContext:(&net.Dialer{Timeout:connect,KeepAlive:30*time.Second}).DialContext, TLSHandshakeTimeout:connect, ResponseHeaderTimeout:read, IdleConnTimeout:30*time.Second, MaxIdleConns:128, MaxIdleConnsPerHost:64}
  if !boolean("FORCE_DIRECT") { tr.Proxy=http.ProxyFromEnvironment }
- return &http.Client{Transport:tr,Timeout:connect+read+2*time.Second,CheckRedirect:func(req *http.Request,via []*http.Request)error{return http.ErrUseLastResponse}}
+ return &http.Client{Transport:tr,Timeout:connect+read+2*time.Second}
 }
 func request(method, target string, headers map[string]string, body []byte, connect, read time.Duration) (*http.Response,[]byte,error) {
  req,e:=http.NewRequest(method,target,bytes.NewReader(body));if e!=nil{return nil,nil,e}
@@ -598,10 +599,10 @@ func extractCountryCode(label string) string {
  re:=regexp.MustCompile(`[\s,;|/]+`)
  for _,tok:=range re.Split(label,-1) {
   tok=regexp.MustCompile(`^[\d\s\-_.|#]+`).ReplaceAllString(strings.TrimSpace(tok),"")
-  m:=regexp.MustCompile(`^([A-Z]{3})(?![A-Za-z])`).FindStringSubmatch(tok)
-  if len(m)>1 {if c:=alpha3ToAlpha2[m[1]];c!=""{return c}}
-  m=regexp.MustCompile(`^([A-Z]{2})(?![A-Za-z])`).FindStringSubmatch(tok)
-  if len(m)>1 && codeSet[m[1]] {return m[1]}
+  m:=regexp.MustCompile(`^([A-Z]{3})`).FindStringSubmatch(tok)
+  if len(m)>1 && (len(tok)==3 || tok[1]<'A' || tok[1]>'Z') {if c:=alpha3ToAlpha2[m[1]];c!=""{return c}}
+  m=regexp.MustCompile(`^([A-Z]{2})`).FindStringSubmatch(tok)
+  if len(m)>1 && (len(tok)==2 || tok[2]<'A' || tok[2]>'Z') && codeSet[m[1]] {return m[1]}
  }
  for _,tok:=range re.Split(label,-1) {
   tok=regexp.MustCompile(`^[\d\s\-_.|#]+`).ReplaceAllString(tok,"")
@@ -742,7 +743,7 @@ func httpTest(node string) HTTPResult {
  }
  var mean float64;for _,v:=range lats{mean+=v};mean/=float64(len(lats));var variance float64;for _,v:=range lats{variance+=(v-mean)*(v-mean)};variance/=float64(len(lats))
  maxlat:=0.0;for _,v:=range lats{if v>maxlat{maxlat=v}}
- return HTTPResult{Node:node,OK:true,Server:"cloudflare",Latency:maxlat,Jitter:variance}
+ return HTTPResult{Node:node,OK:true,Server:"cloudflare",Latency:maxlat,Jitter:math.Sqrt(variance)}
 }
 func bandwidth(node string) BWResult {
  m:=ipPortPattern.FindStringSubmatch(node);if len(m)!=3{return BWResult{Node:node}}
