@@ -6,6 +6,7 @@ package main
 import (
  "bytes"
  "context"
+ "crypto/tls"
  "encoding/json"
  "errors"
  "fmt"
@@ -807,39 +808,151 @@ func syncGitHub() {
  for i:=1;i<=integer("GITHUB_SYNC_MAX_RETRIES");i++ {logf("\n正在同步到 GitHub (尝试 %d/%d)...\n",i,integer("GITHUB_SYNC_MAX_RETRIES"));ctx,cancel:=context.WithTimeout(context.Background(),duration("GIT_SYNC_PROCESS_TIMEOUT",180));cmd:=exec.CommandContext(ctx,args[0],args[1:]...);cmd.Dir=root;out,e:=cmd.CombinedOutput();cancel();if e==nil{logf("已自动推送到 GitHub。\n");return};logf("推送失败: %v\n%s\n",e,string(out));if i<integer("GITHUB_SYNC_MAX_RETRIES"){sleepSec("GITHUB_SYNC_RETRY_DELAY")}}
  notify("GitHub 推送失败，请检查网络或仓库状态。","GitHub 推送失败");logf("已尝试多次推送，均失败。\n")
 }
-func updateDNS(nodes []string, bw []BWResult, av map[string]AvailabilityResult, lat,httpLat,jitter,speed map[string]float64) {
- if !boolean("CF_ENABLED"){logf("Cloudflare DNS 批量更新未启用。\n");return}
- recordType:=strings.ToUpper(str("DNS_RECORD_TYPE"));if recordType!="A"&&recordType!="TXT"{logf("不支持的 DNS_RECORD_TYPE: %s，已跳过 DNS 更新。\n",recordType);return}
- content:=[]string{};seen:=map[string]bool{};targetCount:=integer("DNS_UPDATE_TARGET_COUNT")
- for _,r:=range bw {m:=ipPortPattern.FindStringSubmatch(r.Node);if len(m)!=3{continue};if recordType=="A"&&m[2]!="443"{continue}
-  if boolean("FILTER_IPV6_AVAILABILITY"){if a,ok:=av[r.Node];ok&&a.Stack=="ipv6_only"{continue}}
-  if boolean("FILTER_BLOCKED_COUNTRIES_ENABLED"){country:=strings.SplitN(strings.SplitN(r.Node,"#",2)[1]," ",2)[0];blocked:=false;for _,c:=range stringsVal("BLOCKED_COUNTRIES"){if strings.EqualFold(c,country){blocked=true;break}};if blocked{continue}}
-  value:=m[1];if recordType=="TXT"{value=m[1]+":"+m[2]};if !seen[value]{seen[value]=true;content=append(content,value)};if len(content)>=targetCount{break}
+func riskScore(v any) float64 {
+ if v == nil { return 0 }
+ s := strings.TrimSpace(fmt.Sprint(v))
+ if m := regexp.MustCompile(`([0-9.]+)\\s*\\(([^)]+)\\)`).FindStringSubmatch(s); len(m) > 1 {
+  n, _ := strconv.ParseFloat(m[1], 64)
+  return n
  }
- if len(content)==0&&recordType=="A"{for _,n:=range nodes{m:=ipPortPattern.FindStringSubmatch(n);if len(m)==3&&!seen[m[1]]{seen[m[1]]=true;content=append(content,m[1]);if len(content)>=targetCount{break}}}}
- if len(content)==0 {logf("没有可用的 IP 用于 DNS 更新，跳过。\n");notify("没有可用的 IP 用于 DNS 更新，跳过。","DNS 更新跳过");return}
- logf("准备更新 Cloudflare DNS：%d 条记录，类型 %s\n",len(content),recordType)
- headers:=map[string]string{"Authorization":"Bearer "+str("CF_API_TOKEN"),"Content-Type":"application/json"}
- for attempt:=1;attempt<=integer("DNS_UPDATE_MAX_RETRIES");attempt++ {
-  base:="https://api.cloudflare.com/client/v4/zones/"+url.PathEscape(str("CF_ZONE_ID"))+"/dns_records"
-  u:=base+"?type="+recordType+"&name="+url.QueryEscape(str("CF_DNS_RECORD_NAME"))
-  resp,b,e:=request("GET",u,headers,nil,duration("CF_DNS_CONNECT_TIMEOUT",3),duration("CF_DNS_READ_TIMEOUT",3))
-  if e==nil&&resp.StatusCode>=200&&resp.StatusCode<300 {
-   var data map[string]any;_ = json.Unmarshal(b,&data);success,_:=data["success"].(bool)
-   if success {
-    recs,_:=data["result"].([]any);deletes:=[]any{};for _,x:=range recs{if r,ok:=x.(map[string]any);ok{if id,ok:=r["id"];ok{deletes=append(deletes,map[string]any{"id":id})}}}
-    posts:=[]any{};for _,v:=range content{r:=map[string]any{"name":str("CF_DNS_RECORD_NAME"),"type":recordType,"content":v,"ttl":integer("CF_TTL")};if recordType=="A"{r["proxied"]=boolean("CF_PROXIED")};posts=append(posts,r)}
-    body,_:=json.Marshal(map[string]any{"deletes":deletes,"posts":posts})
-    rr,bb,ee:=request("POST",base+"/batch",headers,body,duration("CF_DNS_CONNECT_TIMEOUT",3),duration("CF_DNS_READ_TIMEOUT",3))
-    var res map[string]any;if ee==nil{_ = json.Unmarshal(bb,&res)}
-    if ee==nil&&rr.StatusCode>=200&&rr.StatusCode<300&&res["success"]==true{logf("Cloudflare DNS 批量更新成功！共 %d 条记录。\n",len(content));return}
-    if ee!=nil{e=ee}else{e=fmt.Errorf("批量更新失败: HTTP %d",rr.StatusCode)}
-   } else {e=errors.New("查询 DNS 记录失败")}
-  } else if e==nil {e=fmt.Errorf("HTTP %d",resp.StatusCode)}
-  logf("[尝试 %d/%d] DNS 更新出错: %v\n",attempt,integer("DNS_UPDATE_MAX_RETRIES"),e);if attempt<integer("DNS_UPDATE_MAX_RETRIES"){sleepSec("DNS_UPDATE_RETRY_DELAY")}
- }
- notify("Cloudflare DNS 更新失败，请检查配置和网络。","DNS 更新失败")
+ n, _ := strconv.ParseFloat(s, 64)
+ return n
 }
+
+func getIPRiskLevel(ip string) string {
+ target := "https://api.ipapi.is/?q=" + url.QueryEscape(ip)
+ resp, body, err := request("GET", target, nil, nil, 5*time.Second, 10*time.Second)
+ if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 { return "未知" }
+ var data map[string]any
+ if json.Unmarshal(body, &data) != nil { return "未知" }
+ company, _ := data["company"].(map[string]any)
+ asn, _ := data["asn"].(map[string]any)
+ var companyScore, asnScore any
+ if company != nil { companyScore = company["abuser_score"] }
+ if asn != nil { asnScore = asn["abuser_score"] }
+ score := ((riskScore(companyScore) + riskScore(asnScore)) / 2) * 5
+ for _, key := range []string{"is_crawler", "is_proxy", "is_vpn", "is_tor", "is_abuser"} {
+  if v, ok := data[key].(bool); ok && v { score += 0.15 }
+ }
+ if v, ok := data["is_bogon"].(bool); ok && v { score += 1 }
+ percentage := score * 100
+ switch {
+ case percentage >= 100: return "极度危险"
+ case percentage >= 20: return "高风险"
+ case percentage >= 5: return "轻微风险"
+ case percentage >= 0.25: return "纯净"
+ default: return "极度纯净"
+ }
+}
+
+func updateDNS(nodes []string, bw []BWResult, av map[string]AvailabilityResult, lat, httpLat, jitter, speed map[string]float64) {
+ if !boolean("CF_ENABLED") { logf("Cloudflare DNS 批量更新未启用。\\n"); return }
+ recordType := strings.ToUpper(str("DNS_RECORD_TYPE"))
+ if recordType != "A" && recordType != "TXT" { logf("不支持的 DNS_RECORD_TYPE: %s，已跳过 DNS 更新。\\n", recordType); return }
+ targetCount := integer("DNS_UPDATE_TARGET_COUNT")
+ blockedSet := map[string]bool{}
+ if boolean("FILTER_BLOCKED_COUNTRIES_ENABLED") {
+  for _, country := range stringsVal("BLOCKED_COUNTRIES") { blockedSet[strings.ToUpper(country)] = true }
+ }
+ riskMap := map[string]string{}
+ if boolean("DNS_IP_RISK_FILTER_ENABLED") && len(bw) > 0 {
+  ipsSeen := map[string]bool{}
+  ips := []string{}
+  for _, item := range bw {
+   m := ipPortPattern.FindStringSubmatch(item.Node)
+   if len(m) == 3 && !ipsSeen[m[1]] { ipsSeen[m[1]] = true; ips = append(ips, m[1]) }
+  }
+  workers := min(max(1, integer("FALLBACK_WORKERS")), max(1, len(ips)))
+  levels := runPool(ips, workers, func(ip string) string { return getIPRiskLevel(ip) }, "IP 风险查询")
+  for i, ip := range ips { riskMap[ip] = levels[i] }
+ }
+ riskOrder := map[string]int{"极度纯净": 0, "纯净": 1, "轻微风险": 2, "高风险": 3, "极度危险": 4}
+ maxRisk := integer("DNS_IP_RISK_MAX_LEVEL")
+ maxRiskName := str("DNS_IP_RISK_MAX_LEVEL")
+ if v, ok := riskOrder[maxRiskName]; ok { maxRisk = v } else { maxRisk = 2 }
+ content := []string{}
+ seen := map[string]bool{}
+ riskFallback := []string{}
+ for _, item := range bw {
+  m := ipPortPattern.FindStringSubmatch(item.Node)
+  if len(m) != 3 { continue }
+  ip, port := m[1], m[2]
+  if recordType == "A" && port != "443" { continue }
+  if boolean("FILTER_IPV6_AVAILABILITY") {
+   if a, ok := av[item.Node]; ok && a.Stack == "ipv6_only" { continue }
+  }
+  country := ""
+  if p := strings.SplitN(item.Node, "#", 2); len(p) == 2 {
+   fields := strings.Fields(p[1]); if len(fields) > 0 { country = strings.ToUpper(fields[0]) }
+  }
+  if blockedSet[country] { continue }
+  if boolean("DNS_IP_RISK_FILTER_ENABLED") {
+   value := ip
+   if recordType == "TXT" { value = ip + ":" + port }
+   if !seen["riskfallback:"+value] { riskFallback = append(riskFallback, value); seen["riskfallback:"+value] = true }
+   level := riskMap[ip]
+   rank, known := riskOrder[level]
+   if !known || rank > maxRisk { continue }
+  }
+  value := ip
+  if recordType == "TXT" { value = ip + ":" + port }
+  if !seen[value] { content = append(content, value); seen[value] = true }
+  if len(content) >= targetCount { break }
+ }
+ if len(content) == 0 && boolean("DNS_IP_RISK_FILTER_ENABLED") && len(riskFallback) > 0 {
+  notify("风险等级检测全部失败或候选节点均超出允许风险等级，已回退到无风险等级过滤的候选列表。", "风险等级检测全部失败")
+  for _, value := range riskFallback {
+   if !seen["fallback:"+value] { content = append(content, value); seen["fallback:"+value] = true }
+   if len(content) >= targetCount { break }
+  }
+ }
+ if len(content) == 0 && recordType == "A" {
+  for _, node := range nodes {
+   m := ipPortPattern.FindStringSubmatch(node)
+   if len(m) == 3 && !seen[m[1]] { content = append(content, m[1]); seen[m[1]] = true; if len(content) >= targetCount { break } }
+  }
+ }
+ if len(content) == 0 {
+  logf("没有可用的 IP 用于 DNS 更新，跳过。\\n")
+  notify("没有可用的 IP 用于 DNS 更新，跳过。", "DNS 更新跳过")
+  return
+ }
+ logf("准备更新 Cloudflare DNS：%d 条记录，类型 %s\\n", len(content), recordType)
+ headers := map[string]string{"Authorization": "Bearer " + str("CF_API_TOKEN"), "Content-Type": "application/json"}
+ for attempt := 1; attempt <= integer("DNS_UPDATE_MAX_RETRIES"); attempt++ {
+  base := "https://api.cloudflare.com/client/v4/zones/" + url.PathEscape(str("CF_ZONE_ID")) + "/dns_records"
+  target := base + "?type=" + recordType + "&name=" + url.QueryEscape(str("CF_DNS_RECORD_NAME"))
+  resp, body, err := request("GET", target, headers, nil, duration("CF_DNS_CONNECT_TIMEOUT", 3), duration("CF_DNS_READ_TIMEOUT", 3))
+  if err == nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+   var data map[string]any
+   _ = json.Unmarshal(body, &data)
+   if data["success"] == true {
+    records, _ := data["result"].([]any)
+    deletes := []any{}
+    for _, item := range records { if record, ok := item.(map[string]any); ok { if id, exists := record["id"]; exists { deletes = append(deletes, map[string]any{"id": id}) } } }
+    posts := []any{}
+    for _, value := range content {
+     record := map[string]any{"name": str("CF_DNS_RECORD_NAME"), "type": recordType, "content": value, "ttl": integer("CF_TTL")}
+     if recordType == "A" { record["proxied"] = boolean("CF_PROXIED") }
+     posts = append(posts, record)
+    }
+    payload, _ := json.Marshal(map[string]any{"deletes": deletes, "posts": posts})
+    batchResp, batchBody, batchErr := request("POST", base+"/batch", headers, payload, duration("CF_DNS_CONNECT_TIMEOUT", 3), duration("CF_DNS_READ_TIMEOUT", 3))
+    var batchResult map[string]any
+    if batchErr == nil { _ = json.Unmarshal(batchBody, &batchResult) }
+    if batchErr == nil && batchResp.StatusCode >= 200 && batchResp.StatusCode < 300 && batchResult["success"] == true {
+     logf("Cloudflare DNS 批量更新成功！共 %d 条记录。\\n", len(content))
+     return
+    }
+    if batchErr != nil { err = batchErr } else { err = fmt.Errorf("批量更新失败: HTTP %d", batchResp.StatusCode) }
+   } else { err = errors.New("查询 DNS 记录失败") }
+  } else if err == nil { err = fmt.Errorf("HTTP %d", resp.StatusCode) }
+  logf("[尝试 %d/%d] DNS 更新出错: %v\\n", attempt, integer("DNS_UPDATE_MAX_RETRIES"), err)
+  if attempt < integer("DNS_UPDATE_MAX_RETRIES") { sleepSec("DNS_UPDATE_RETRY_DELAY") }
+ }
+ notify("Cloudflare DNS 更新失败，请检查配置和网络。", "DNS 更新失败")
+}
+
 func main() {
  root,_=filepath.Abs(filepath.Dir(os.Args[0]))
  // go run 时从当前工作目录读取配置，二进制运行时从二进制所在目录读取。
