@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -90,9 +88,6 @@ func main() {
 	if workers > len(req.Nodes) {
 		workers = len(req.Nodes)
 	}
-	if workers > runtime.NumCPU()*64 && runtime.NumCPU() > 0 {
-		// Network I/O is not CPU-bound; the configured worker cap remains authoritative.
-	}
 
 	jobs := make(chan string)
 	results := make(chan Result, len(req.Nodes))
@@ -126,5 +121,4 @@ func main() {
 		fmt.Fprintln(os.Stderr, "输出 TCP 测试结果失败:", err)
 		os.Exit(3)
 	}
-	_ = strconv.IntSize
 }
