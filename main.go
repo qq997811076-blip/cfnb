@@ -877,7 +877,7 @@ func queryIPInfo(ip string, pool *ipInfoTokenPool) string {
 func calibrate(nodes []string) {
  if !boolean("IP_CALIBRATION_ENABLED"){logf("IP 地区校准已禁用，跳过。\n");return}
  tokenPath:=filepath.Join(root,str("IP_CALIBRATION_TOKEN_FILE"));cachePath:=filepath.Join(root,str("IP_CALIBRATION_CACHE_FILE"));cache:=readCache(cachePath)
- for i,n:=range nodes {ipp:=strings.SplitN(n,"#",2)[0];if tag:=cache[ipp];tag!=""{nodes[i]=ipp+"#"+strings.Fields(tag)[0]}}
+ for i,n:=range nodes {ipp:=strings.SplitN(n,"#",2)[0];if tag:=strings.TrimSpace(cache[ipp]);tag!=""{nodes[i]=ipp+"#"+tag}}
  tokens:=loadLines(tokenPath);if len(tokens)==0{logf("valid_tokens.txt 为空，IP 地区校准跳过。\n");return}
  logf("正在进行 token 有效性校验...\n")
  workers := integer("IP_CALIBRATION_CONCURRENCY")
@@ -924,7 +924,7 @@ func calibrate(nodes []string) {
   if cacheAppend != nil { _ = cacheAppend.Close() }
   if len(ips) > 0 && successCount == 0 { logf("警告：所有 IP 地区校准失败，可能所有 token 均已失效。\n"); notify("IP地区校准：所有IP查询均失败，可能所有token均已失效。", "IP校准全失败") }
  }
- for i,n:=range nodes {ipp:=strings.SplitN(n,"#",2)[0];if tag:=cache[ipp];tag!=""{nodes[i]=ipp+"#"+strings.Fields(tag)[0]}}
+ for i,n:=range nodes {ipp:=strings.SplitN(n,"#",2)[0];if tag:=strings.TrimSpace(cache[ipp]);tag!=""{nodes[i]=ipp+"#"+tag}}
  writeCache(cachePath,cache)
 }
 func tcpTest(node string) (NodeResult,bool) {
