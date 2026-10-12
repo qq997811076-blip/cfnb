@@ -1080,7 +1080,7 @@ func riskScore(v any) float64 {
 
 func getIPRiskLevel(ip string) string {
  target := "https://api.ipapi.is/?q=" + url.QueryEscape(ip)
- resp, body, err := request("GET", target, nil, nil, 5*time.Second, 10*time.Second)
+ resp, body, err := request("GET", target, nil, nil, 10*time.Second, 10*time.Second)
  if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 { return "未知" }
  var data map[string]any
  if json.Unmarshal(body, &data) != nil { return "未知" }
