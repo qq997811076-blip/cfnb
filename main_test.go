@@ -153,3 +153,24 @@ func TestWriteIPPreservesConfiguredFormatting(t *testing.T) {
 		t.Fatalf("output = %q, want %q", string(data), want)
 	}
 }
+
+
+func TestRunPoolPreservesInputOrder(t *testing.T) {
+	items := []string{"first", "second", "third", "fourth"}
+	got := runPool(items, 3, func(item string) string {
+		return item + "-done"
+	}, "test")
+	want := []string{"first-done", "second-done", "third-done", "fourth-done"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("runPool() = %#v, want %#v", got, want)
+	}
+}
+
+func TestRunPoolHandlesEmptyInput(t *testing.T) {
+	got := runPool([]string{}, 4, func(item string) string {
+		return item
+	}, "empty-test")
+	if len(got) != 0 {
+		t.Fatalf("runPool(empty) returned %#v, want empty result", got)
+	}
+}
