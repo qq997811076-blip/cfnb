@@ -1213,9 +1213,27 @@ func main() {
  if len(bw)==0 {logf("带宽测速多次重试仍无有效结果，将使用 TCP 筛选结果作为最终节点。\n");notify("带宽测速全部失败，已降级使用 TCP 排序节点。","带宽测速全部失败");if boolean("USE_GLOBAL_MODE"){for _,r:=range results{if len(selected)>=integer("GLOBAL_TOP_N"){break};selected=append(selected,r.Node)}}else{for _,country:=range countryOrder{rs:=countryNodes[country];sort.SliceStable(rs,func(i,j int)bool{if rs[i].Success!=rs[j].Success{return rs[i].Success>rs[j].Success};return rs[i].Latency<rs[j].Latency});for i:=0;i<min(integer("PER_COUNTRY_TOP_N"),len(rs));i++{selected=append(selected,rs[i].Node)}}}
  } else {
   for _,r:=range bw{speed[r.Node]=r.Speed}
-  score:=map[string]float64{};for _,r:=range bw{tl:=latency[r.Node];hl:=httpLat[r.Node]/1000;j:=jitter[r.Node]/1000;penalty:=1+number("TCP_LATENCY_WEIGHT")*tl+number("HTTP_LATENCY_WEIGHT")*hl+number("JITTER_WEIGHT")*j;if penalty<=0{penalty=1};score[r.Node]=number("SPEED_WEIGHT")*r.Speed/penalty}
+  score:=map[string]float64{}
+  for _,r:=range bw {
+   tl,ok:=latency[r.Node];if !ok{tl=999.0}
+   hl,ok:=httpLat[r.Node];if !ok{hl=999999.0}
+   j,ok:=jitter[r.Node];if !ok{j=999999.0}
+   hl/=1000;j/=1000
+   penalty:=1+number("TCP_LATENCY_WEIGHT")*tl+number("HTTP_LATENCY_WEIGHT")*hl+number("JITTER_WEIGHT")*j
+   if penalty<=0{penalty=1}
+   score[r.Node]=number("SPEED_WEIGHT")*r.Speed/penalty
+  }
   sort.SliceStable(bw,func(i,j int)bool{return score[bw[i].Node]>score[bw[j].Node]})
-  if boolean("USE_GLOBAL_MODE"){for i:=0;i<min(integer("GLOBAL_TOP_N"),len(bw));i++{selected=append(selected,bw[i].Node)}} else {count:=map[string]int{};for _,r:=range bw{country:="";p:=strings.SplitN(r.Node,"#",2);if len(p)==2{country=strings.Fields(p[1])[0]};if country!=""&&count[country]<integer("PER_COUNTRY_TOP_N"){selected=append(selected,r.Node);count[country]++}}}
+  if boolean("USE_GLOBAL_MODE") {
+   for i:=0;i<min(integer("GLOBAL_TOP_N"),len(bw));i++{selected=append(selected,bw[i].Node)}
+  } else {
+   count:=map[string]int{}
+   for _,r:=range bw {
+    country:="";p:=strings.SplitN(r.Node,"#",2);if len(p)==2{country=strings.Fields(p[1])[0]}
+    if country!=""&&count[country]<integer("PER_COUNTRY_TOP_N"){selected=append(selected,r.Node);count[country]++}
+   }
+   sort.SliceStable(selected,func(i,j int)bool{return score[selected[i]]>score[selected[j]]})
+  }
  }
  logf("\n================ 最终优选节点 ================\n");for i,n:=range selected{line:=fmt.Sprintf("%d. %s",i+1,n);if v,ok:=speed[n];ok{line+=fmt.Sprintf(" 速度 %.2f Mbps",v)};if v,ok:=httpLat[n];ok{line+=fmt.Sprintf(" HTTP延迟 %.2f ms",v)};if v,ok:=jitter[n];ok{line+=fmt.Sprintf(" 抖动 %.2f ms",v)};if v,ok:=latency[n];ok{line+=fmt.Sprintf(" TCP延迟 %.2f ms",v*1000)};logf("%s\n",line)}
  if e:=writeIP(selected,speed,latency,httpLat,jitter);e!=nil{logf("写入结果失败: %v\n",e);return};logf("结果已保存到 %s（共 %d 个节点）\n",str("OUTPUT_FILE"),len(selected))
