@@ -1254,7 +1254,7 @@ func main() {
  defer os.Remove(lockPath)
  mode:="全局最优"+strconv.Itoa(integer("GLOBAL_TOP_N"))+"个";if !boolean("USE_GLOBAL_MODE"){mode="每个国家最优"+strconv.Itoa(integer("PER_COUNTRY_TOP_N"))+"个"}
  logf("当前模式：%s，每个节点测试 %d 次 TCP 连接\n",mode,integer("TCP_PROBES"));logf("最低成功率要求：%.0f%%\n",number("MIN_SUCCESS_RATE")*100)
- nodes:=fetchSources();if len(nodes)==0{logf("没有获取到任何有效节点，退出。\n");return}
+ nodes:=fetchSources();if len(nodes)==0{logf("没有获取到任何有效节点，退出。\n");_ = os.Remove(lockPath);os.Exit(1)}
  calibrate(nodes)
  if boolean("PRE_FILTER_PORT_ENABLED"){allowed:=map[string]bool{};for _,v:=range stringsVal("PRE_FILTER_PORTS"){allowed[fmt.Sprint(v)]=true};before:=len(nodes);out:=[]string{};for _,n:=range nodes{m:=ipPortPattern.FindStringSubmatch(n);if len(m)==3&&allowed[m[2]]{out=append(out,n)}};nodes=out;logf("前置端口过滤：%d -> %d 个节点\n",before,len(nodes))}
  if boolean("PRE_FILTER_BLOCKED_ENABLED"){blocked:=map[string]bool{};for _,v:=range stringsVal("PRE_FILTER_BLOCKED_COUNTRIES"){blocked[strings.ToUpper(v)]=true};before:=len(nodes);out:=[]string{};for _,n:=range nodes{p:=strings.SplitN(n,"#",2);country:="";if len(p)==2{fields:=strings.Fields(p[1]);if len(fields)>0{country=fields[0]}}
