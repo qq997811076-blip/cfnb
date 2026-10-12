@@ -1070,7 +1070,7 @@ func syncGitHub() {
 func riskScore(v any) float64 {
  if v == nil { return 0 }
  s := strings.TrimSpace(fmt.Sprint(v))
- if m := regexp.MustCompile(`([0-9.]+)\s*\(([^)]+)\)`).FindStringSubmatch(s); len(m) > 1 {
+ if m := regexp.MustCompile(`^([0-9.]+)\s*\(([^)]+)\)`).FindStringSubmatch(s); len(m) > 1 {
   n, _ := strconv.ParseFloat(m[1], 64)
   return n
  }
