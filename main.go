@@ -1027,7 +1027,7 @@ func syncGitHub() {
  }
  scriptPath := filepath.Join(root, scriptName)
  if _, err := os.Stat(scriptPath); err != nil {
-  logf("未找到 %s，跳过 GitHub 同步。\\n", scriptName)
+  logf("未找到 %s，跳过 GitHub 同步。\n", scriptName)
   return
  }
  scriptData, _ := os.ReadFile(scriptPath)
@@ -1039,7 +1039,7 @@ func syncGitHub() {
  if retries < 1 { retries = 1 }
  timeout := duration("GIT_SYNC_PROCESS_TIMEOUT", 180)
  for attempt := 1; attempt <= retries; attempt++ {
-  logf("\\n正在同步到 GitHub (尝试 %d/%d)...\\n", attempt, retries)
+  logf("\n正在同步到 GitHub (尝试 %d/%d)...\n", attempt, retries)
   ctx, cancel := context.WithTimeout(context.Background(), timeout)
   args := append(append([]string{}, commandPrefix...), scriptPath)
   cmd := exec.CommandContext(ctx, args[0], args[1:]...)
@@ -1053,18 +1053,18 @@ func syncGitHub() {
    logf("%s", outputText)
   }
   if err == nil {
-   logf("已自动推送到 GitHub。\\n")
+   logf("已自动推送到 GitHub。\n")
    return
   }
   if timedOut {
-   logf("推送超时（超过 %s）\\n", timeout)
+   logf("推送超时（超过 %s）\n", timeout)
   } else {
-   logf("推送失败：%v\\n", err)
+   logf("推送失败：%v\n", err)
   }
   if attempt < retries { sleepSec("GITHUB_SYNC_RETRY_DELAY") }
  }
  notify("GitHub 推送失败，已重试 "+strconv.Itoa(retries)+" 次，请检查网络或仓库状态。", "GitHub 推送失败")
- logf("已尝试 %d 次推送，均失败，请检查网络或 GitHub 仓库状态。\\n", retries)
+ logf("已尝试 %d 次推送，均失败，请检查网络或 GitHub 仓库状态。\n", retries)
 }
 
 func riskScore(v any) float64 {
