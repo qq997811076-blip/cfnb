@@ -988,38 +988,47 @@ func runSyncCommand(ctx context.Context, args []string, token string) error {
 
 func syncGitHub() {
  scriptName := "git_sync.sh"
- if runtime.GOOS == "windows" { scriptName = "git_sync.ps1" }
+ var commandPrefix []string
+ if runtime.GOOS == "windows" {
+  scriptName = "git_sync.ps1"
+  commandPrefix = []string{"powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"}
+ } else {
+  commandPrefix = []string{"bash"}
+ }
  scriptPath := filepath.Join(root, scriptName)
- data, err := os.ReadFile(scriptPath)
- if err != nil { logf("未找到 %s，跳过 GitHub 同步。\n", scriptName); return }
- source := string(data)
- token := syncSetting(source, "github_token")
- username := syncSetting(source, "github_username")
- repo := syncSetting(source, "repo_name")
- branch := syncSetting(source, "branch")
- if token == "" || username == "" || repo == "" || branch == "" {
-  logf("%s 中 GitHub 同步配置不完整，跳过同步。\n", scriptName)
+ if _, err := os.Stat(scriptPath); err != nil {
+  logf("未找到 %s，跳过 GitHub 同步。\\n", scriptName)
   return
  }
- pushURL := "https://" + token + "@github.com/" + username + "/" + repo + ".git"
- for attempt := 1; attempt <= integer("GITHUB_SYNC_MAX_RETRIES"); attempt++ {
-  logf("\n正在同步到 GitHub (尝试 %d/%d)...\n", attempt, integer("GITHUB_SYNC_MAX_RETRIES"))
-  ctx, cancel := context.WithTimeout(context.Background(), duration("GIT_SYNC_PROCESS_TIMEOUT", 180))
-  _ = runSyncCommand(ctx, []string{"git", "pull", "origin", branch}, token)
-  _ = runSyncCommand(ctx, []string{"git", "add", "ip.txt"}, token)
-  commitMessage := "Update ip.txt on " + time.Now().Format("2006-01-02 15:04:05")
-  _ = runSyncCommand(ctx, []string{"git", "commit", "-m", commitMessage}, token)
-  pushErr := runSyncCommand(ctx, []string{"git", "push", pushURL, branch, "--force"}, token)
+ if runtime.GOOS != "windows" {
+  _ = os.Chmod(scriptPath, 0755)
+ }
+ retries := integer("GITHUB_SYNC_MAX_RETRIES")
+ if retries < 1 { retries = 1 }
+ timeout := duration("GIT_SYNC_PROCESS_TIMEOUT", 180)
+ for attempt := 1; attempt <= retries; attempt++ {
+  logf("\\n正在同步到 GitHub (尝试 %d/%d)...\\n", attempt, retries)
+  ctx, cancel := context.WithTimeout(context.Background(), timeout)
+  args := append(append([]string{}, commandPrefix...), scriptPath)
+  cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+  cmd.Dir = root
+  output, err := cmd.CombinedOutput()
+  timedOut := ctx.Err() == context.DeadlineExceeded
   cancel()
-  if pushErr == nil {
-   logf("已自动推送到 GitHub。\n")
+  if len(output) > 0 { logf("%s", string(output)) }
+  if err == nil {
+   logf("已自动推送到 GitHub。\\n")
    return
   }
-  logf("GitHub 推送失败：%v\n", pushErr)
-  if attempt < integer("GITHUB_SYNC_MAX_RETRIES") { sleepSec("GITHUB_SYNC_RETRY_DELAY") }
+  if timedOut {
+   logf("推送超时（超过 %s）\\n", timeout)
+  } else {
+   logf("推送失败：%v\\n", err)
+  }
+  if attempt < retries { sleepSec("GITHUB_SYNC_RETRY_DELAY") }
  }
- notify("GitHub 推送失败，请检查网络或仓库状态。", "GitHub 推送失败")
- logf("已尝试 %d 次推送，均失败，请检查网络或 GitHub 仓库状态。\n", integer("GITHUB_SYNC_MAX_RETRIES"))
+ notify("GitHub 推送失败，已重试 "+strconv.Itoa(retries)+" 次，请检查网络或仓库状态。", "GitHub 推送失败")
+ logf("已尝试 %d 次推送，均失败，请检查网络或 GitHub 仓库状态。\\n", retries)
 }
 
 func riskScore(v any) float64 {
