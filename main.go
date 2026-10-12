@@ -611,6 +611,20 @@ func request(method, target string, headers map[string]string, body []byte, conn
  resp,e:=newHTTPClient(connect,read).Do(req);if e!=nil{return nil,nil,e}
  b,re:=io.ReadAll(resp.Body);resp.Body.Close();if re!=nil{return resp,b,re};return resp,b,nil
 }
+func requestNoRedirect(method, target string, headers map[string]string, body []byte, connect, read time.Duration) (*http.Response, []byte, error) {
+ req, err := http.NewRequest(method, target, bytes.NewReader(body))
+ if err != nil { return nil, nil, err }
+ for key, value := range headers { req.Header.Set(key, value) }
+ client := *newHTTPClient(connect, read)
+ client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
+ resp, err := client.Do(req)
+ if err != nil { return nil, nil, err }
+ data, readErr := io.ReadAll(resp.Body)
+ _ = resp.Body.Close()
+ if readErr != nil { return resp, data, readErr }
+ return resp, data, nil
+}
+
 func sleepSec(k string) { n:=number(k); if n>0 {time.Sleep(time.Duration(n*float64(time.Second)))} }
 func notify(content,summary string) {
  if !boolean("ENABLE_WXPUSHER"){return}
@@ -705,7 +719,7 @@ func loadLines(path string) []string {b,e:=os.ReadFile(path);if e!=nil{return ni
 func readCache(path string) map[string]string {out:=map[string]string{};for _,line:=range loadLines(path){p:=strings.SplitN(line,"#",2);if len(p)==2{out[strings.TrimSpace(p[0])]=strings.TrimSpace(p[1])}};return out}
 func writeCache(path string, rows map[string]string) {
  keys := make([]string, 0, len(rows))
- for key := range rows { keys = append(keys, key) }
+ for key := range rows { ip := strings.SplitN(key, ":", 2)[0]; if net.ParseIP(ip) != nil { keys = append(keys, key) } }
  sort.Slice(keys, func(i, j int) bool {
   ipI := strings.SplitN(keys[i], ":", 2)[0]
   ipJ := strings.SplitN(keys[j], ":", 2)[0]
@@ -878,7 +892,7 @@ func httpTest(node string) HTTPResult {
  m:=ipPortPattern.FindStringSubmatch(node);if len(m)!=3{return HTTPResult{Node:node}}
  target:="http://"+net.JoinHostPort(m[1],m[2])+"/cdn-cgi/trace";method:=strings.ToUpper(str("HTTP_TEST_METHOD"));if method!="HEAD"{method="GET"}
  n:=max(3,integer("HTTP_JITTER_SAMPLES"));lats:=[]float64{}
- for i:=0;i<n;i++ {start:=time.Now();resp,_,e:=request(method,target,map[string]string{"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"},nil,duration("HTTP_TEST_CONNECT_TIMEOUT",3),duration("HTTP_TEST_TIMEOUT",3))
+ for i:=0;i<n;i++ {start:=time.Now();resp,_,e:=requestNoRedirect(method,target,map[string]string{"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"},nil,duration("HTTP_TEST_CONNECT_TIMEOUT",3),duration("HTTP_TEST_TIMEOUT",3))
   if e!=nil{return HTTPResult{Node:node,Server:"connection_error"}};lat:=float64(time.Since(start).Microseconds())/1000
   if resp.StatusCode!=400{return HTTPResult{Node:node,Server:fmt.Sprintf("status_%d",resp.StatusCode)}}
   server:=resp.Header.Get("Server");if !strings.HasPrefix(strings.ToLower(server),"cloudflare"){return HTTPResult{Node:node,Server:server}}
