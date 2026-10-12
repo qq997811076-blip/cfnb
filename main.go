@@ -19,6 +19,7 @@ import (
  "os/exec"
  "path/filepath"
  "regexp"
+ "runtime"
  "sort"
  "strconv"
  "strings"
@@ -928,13 +929,58 @@ func writeIP(nodes []string,speed,lat,httpLat,jitter map[string]float64) error {
  if boolean("AD_FOOTER_ENABLED"){for _,s:=range stringsVal("AD_FOOTER_LINES"){b.WriteString(s+"\n")}}
  return os.WriteFile(filepath.Join(root,str("OUTPUT_FILE")),[]byte(b.String()),0644)
 }
-func syncGitHub() {
- script:="git_sync.sh";args:=[]string{filepath.Join(root,script)}
- if os.PathSeparator=='\\' {script="git_sync.ps1";args=[]string{"powershell","-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-File",filepath.Join(root,script)}}
- if _,e:=os.Stat(filepath.Join(root,script));e!=nil {logf("未找到 %s，跳过 GitHub 同步。\n",script);return}
- for i:=1;i<=integer("GITHUB_SYNC_MAX_RETRIES");i++ {logf("\n正在同步到 GitHub (尝试 %d/%d)...\n",i,integer("GITHUB_SYNC_MAX_RETRIES"));ctx,cancel:=context.WithTimeout(context.Background(),duration("GIT_SYNC_PROCESS_TIMEOUT",180));cmd:=exec.CommandContext(ctx,args[0],args[1:]...);cmd.Dir=root;out,e:=cmd.CombinedOutput();cancel();if e==nil{logf("已自动推送到 GitHub。\n");return};logf("推送失败: %v\n%s\n",e,string(out));if i<integer("GITHUB_SYNC_MAX_RETRIES"){sleepSec("GITHUB_SYNC_RETRY_DELAY")}}
- notify("GitHub 推送失败，请检查网络或仓库状态。","GitHub 推送失败");logf("已尝试多次推送，均失败。\n")
+func syncSetting(script, key string) string {
+ pattern := regexp.MustCompile(`(?m)^\\s*(?:\\$)?` + regexp.QuoteMeta(key) + `\\s*=\\s*["']([^"']*)["']`)
+ match := pattern.FindStringSubmatch(script)
+ if len(match) < 2 { return "" }
+ return strings.TrimSpace(match[1])
 }
+
+func runSyncCommand(ctx context.Context, args []string, token string) error {
+ cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+ cmd.Dir = root
+ output, err := cmd.CombinedOutput()
+ safeOutput := strings.ReplaceAll(string(output), token, "***")
+ if strings.TrimSpace(safeOutput) != "" { logf("%s\\n", strings.TrimSpace(safeOutput)) }
+ return err
+}
+
+func syncGitHub() {
+ scriptName := "git_sync.sh"
+ if runtime.GOOS == "windows" { scriptName = "git_sync.ps1" }
+ scriptPath := filepath.Join(root, scriptName)
+ data, err := os.ReadFile(scriptPath)
+ if err != nil { logf("未找到 %s，跳过 GitHub 同步。\\n", scriptName); return }
+ source := string(data)
+ token := syncSetting(source, "github_token")
+ username := syncSetting(source, "github_username")
+ repo := syncSetting(source, "repo_name")
+ branch := syncSetting(source, "branch")
+ if token == "" || username == "" || repo == "" || branch == "" {
+  logf("%s 中 GitHub 同步配置不完整，跳过同步。\\n", scriptName)
+  return
+ }
+ pushURL := "https://" + token + "@github.com/" + username + "/" + repo + ".git"
+ for attempt := 1; attempt <= integer("GITHUB_SYNC_MAX_RETRIES"); attempt++ {
+  logf("\\n正在同步到 GitHub (尝试 %d/%d)...\\n", attempt, integer("GITHUB_SYNC_MAX_RETRIES"))
+  ctx, cancel := context.WithTimeout(context.Background(), duration("GIT_SYNC_PROCESS_TIMEOUT", 180))
+  _ = runSyncCommand(ctx, []string{"git", "pull", "origin", branch}, token)
+  _ = runSyncCommand(ctx, []string{"git", "add", "ip.txt"}, token)
+  commitMessage := "Update ip.txt on " + time.Now().Format("2006-01-02 15:04:05")
+  _ = runSyncCommand(ctx, []string{"git", "commit", "-m", commitMessage}, token)
+  pushErr := runSyncCommand(ctx, []string{"git", "push", pushURL, branch, "--force"}, token)
+  cancel()
+  if pushErr == nil {
+   logf("已自动推送到 GitHub。\\n")
+   return
+  }
+  logf("GitHub 推送失败：%v\\n", pushErr)
+  if attempt < integer("GITHUB_SYNC_MAX_RETRIES") { sleepSec("GITHUB_SYNC_RETRY_DELAY") }
+ }
+ notify("GitHub 推送失败，请检查网络或仓库状态。", "GitHub 推送失败")
+ logf("已尝试 %d 次推送，均失败，请检查网络或 GitHub 仓库状态。\\n", integer("GITHUB_SYNC_MAX_RETRIES"))
+}
+
 func riskScore(v any) float64 {
  if v == nil { return 0 }
  s := strings.TrimSpace(fmt.Sprint(v))
