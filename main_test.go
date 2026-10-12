@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"reflect"
 	"strings"
@@ -91,4 +92,13 @@ func TestLoadConfigUsesDefaultsWhenMissing(t *testing.T) {
  if err := loadConfig(); err != nil { t.Fatalf("loadConfig() error = %v", err) }
  if got := integer("GLOBAL_TOP_N"); got != 15 { t.Fatalf("GLOBAL_TOP_N = %d, want 15", got) }
  if got := str("OUTPUT_FILE"); got != "ip.txt" { t.Fatalf("OUTPUT_FILE = %q, want ip.txt", got) }
+}
+
+func TestSourceEnabledDefault(t *testing.T) {
+ var defaultSource Source
+ if err := json.Unmarshal([]byte(`{"url":"https://example.com"}`), &defaultSource); err != nil { t.Fatal(err) }
+ if defaultSource.Enabled != nil { t.Fatalf("omitted enabled flag should stay nil, got %v", *defaultSource.Enabled) }
+ var disabled Source
+ if err := json.Unmarshal([]byte(`{"url":"https://example.com","enabled":false}`), &disabled); err != nil { t.Fatal(err) }
+ if disabled.Enabled == nil || *disabled.Enabled { t.Fatalf("explicit false should be preserved, got %#v", disabled.Enabled) }
 }

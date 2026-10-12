@@ -33,7 +33,7 @@ type NodeResult struct { Node string; Latency float64; Country string; Success i
 type AvailabilityResult struct { Node string; OK bool; Stack string; Exit map[string]any }
 type HTTPResult struct { Node string; OK bool; Server string; Latency float64; Jitter float64 }
 type BWResult struct { Node string; Speed float64 }
-type Source struct { URL string `json:"url"`; Enabled bool `json:"enabled"` }
+type Source struct { URL string `json:"url"`; Enabled *bool `json:"enabled"` }
 
 var cfg Config
 var root string
@@ -725,7 +725,7 @@ func parseAdaptive(text string) []string {
 func fetchSources() []string {
  var sources []Source; raw,_:=json.Marshal(val("ADDITIONAL_SOURCES"));_ = json.Unmarshal(raw,&sources)
  nodes:=[]string{};seen:=map[string]bool{}
- for _,s:=range sources {if !s.Enabled||s.URL==""{continue}
+ for _,s:=range sources {if (s.Enabled != nil && !*s.Enabled) || s.URL == "" { continue }
   for attempt:=1;attempt<=integer("FETCH_MAX_RETRIES");attempt++ {
    logf("正在请求数据源 %s (尝试 %d/%d) ...\n",s.URL,attempt,integer("FETCH_MAX_RETRIES"))
    resp,b,e:=request("GET",s.URL,nil,nil,duration("FETCH_CONNECT_TIMEOUT",3),duration("FETCH_TIMEOUT",3))
@@ -892,7 +892,7 @@ func calibrate(nodes []string) {
 }
 func tcpTest(node string) (NodeResult,bool) {
  m:=nodePattern.FindStringSubmatch(node);if len(m)!=4{return NodeResult{},false}
- probes:=integer("TCP_PROBES");if probes<1{probes=1};timeout:=duration("TIMEOUT",2)
+ probes:=integer("TCP_PROBES");if probes<=0{return NodeResult{},false};timeout:=duration("TIMEOUT",2)
  success:=0;maxLat:=0.0
  for i:=0;i<probes;i++ {start:=time.Now();conn,e:=net.DialTimeout("tcp",net.JoinHostPort(m[1],m[2]),timeout);if e==nil {lat:=time.Since(start).Seconds();if lat>maxLat{maxLat=lat};success++;_ = conn.Close()}}
  rate:=number("MIN_SUCCESS_RATE");if success==0||float64(success)/float64(probes)<rate{return NodeResult{},false}
@@ -1164,7 +1164,7 @@ func main() {
  calibrate(nodes)
  if boolean("PRE_FILTER_PORT_ENABLED"){allowed:=map[string]bool{};for _,v:=range stringsVal("PRE_FILTER_PORTS"){allowed[fmt.Sprint(v)]=true};before:=len(nodes);out:=[]string{};for _,n:=range nodes{m:=ipPortPattern.FindStringSubmatch(n);if len(m)==3&&allowed[m[2]]{out=append(out,n)}};nodes=out;logf("前置端口过滤：%d -> %d 个节点\n",before,len(nodes))}
  if boolean("PRE_FILTER_BLOCKED_ENABLED"){blocked:=map[string]bool{};for _,v:=range stringsVal("PRE_FILTER_BLOCKED_COUNTRIES"){blocked[strings.ToUpper(v)]=true};before:=len(nodes);out:=[]string{};for _,n:=range nodes{p:=strings.SplitN(n,"#",2);if len(p)==2&&!blocked[strings.ToUpper(strings.Fields(p[1])[0])]{out=append(out,n)}};nodes=out;logf("前置黑名单过滤：%d -> %d 个节点\n",before,len(nodes))}
- if boolean("FILTER_COUNTRIES_ENABLED"){allow:=map[string]bool{};for _,c:=range stringsVal("ALLOWED_COUNTRIES"){allow[strings.ToUpper(c)]=true};out:=[]string{};for _,n:=range nodes{p:=strings.SplitN(n,"#",2);if len(p)==2&&allow[strings.ToUpper(strings.Fields(p[1])[0])]{out=append(out,n)}};nodes=out;logf("国家白名单过滤后剩余 %d 个节点\n",len(nodes))}
+ if boolean("FILTER_COUNTRIES_ENABLED") && len(stringsVal("ALLOWED_COUNTRIES")) > 0 {allow:=map[string]bool{};for _,c:=range stringsVal("ALLOWED_COUNTRIES"){allow[strings.ToUpper(c)]=true};out:=[]string{};for _,n:=range nodes{p:=strings.SplitN(n,"#",2);if len(p)==2&&allow[strings.ToUpper(strings.Fields(p[1])[0])]{out=append(out,n)}};nodes=out;logf("国家白名单过滤后剩余 %d 个节点\n",len(nodes))}
  if len(nodes)==0{logf("过滤后无任何节点，退出。\n");return}
  logf("开始 TCP 连接测试（超时 %gs，并发 %d）...\n",number("TIMEOUT"),integer("MAX_WORKERS"))
  tcp:=runPool(nodes,integer("MAX_WORKERS"),func(n string)NodeResult{r,_:=tcpTest(n);return r},"TCP")
