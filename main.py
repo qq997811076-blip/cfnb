@@ -1126,14 +1126,21 @@ def run_go_tcp_checker(nodes):
         cwd=script_dir,
         bufsize=1,
     )
+    output_chunks = []
+    stdout_reader = threading.Thread(
+        target=lambda: output_chunks.append(process.stdout.read()),
+        daemon=True,
+    )
+    stdout_reader.start()
     try:
         process.stdin.write(json.dumps(request_data, ensure_ascii=False))
         process.stdin.close()
         # Go 将进度写到 stderr；逐行转发到终端，JSON 结果仍单独走 stdout。
         for progress_line in process.stderr:
             print(progress_line.rstrip(), flush=True)
-        output = process.stdout.read()
         return_code = process.wait()
+        stdout_reader.join()
+        output = output_chunks[0] if output_chunks else ""
     finally:
         if process.stdin and not process.stdin.closed:
             process.stdin.close()
