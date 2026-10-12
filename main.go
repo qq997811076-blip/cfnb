@@ -1108,6 +1108,19 @@ func getIPRiskLevel(ip string) string {
  }
 }
 
+func fallbackARecordContent(nodes []string) []string {
+ content := []string{}
+ seen := map[string]bool{}
+ for _, node := range nodes {
+  m := ipPortPattern.FindStringSubmatch(node)
+  if len(m) == 3 && !seen[m[1]] {
+   content = append(content, m[1])
+   seen[m[1]] = true
+  }
+ }
+ return content
+}
+
 func updateDNS(nodes []string, bw []BWResult, av map[string]AvailabilityResult, lat, httpLat, jitter, speed map[string]float64) {
  if !boolean("CF_ENABLED") { logf("Cloudflare DNS 批量更新未启用。\n"); return }
  recordType := strings.ToUpper(str("DNS_RECORD_TYPE"))
@@ -1179,10 +1192,8 @@ func updateDNS(nodes []string, bw []BWResult, av map[string]AvailabilityResult, 
   }
  }
  if len(content) == 0 && recordType == "A" {
-  for _, node := range nodes {
-   m := ipPortPattern.FindStringSubmatch(node)
-   if len(m) == 3 && !seen[m[1]] { content = append(content, m[1]); seen[m[1]] = true; if len(content) >= targetCount { break } }
-  }
+  // Python fallback uses every final ip.txt node; DNS_UPDATE_TARGET_COUNT applies only to bandwidth candidates.
+  content = fallbackARecordContent(nodes)
  }
  if len(content) == 0 {
   logf("没有可用的 IP 用于 DNS 更新，跳过。\n")

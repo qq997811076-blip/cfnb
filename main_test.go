@@ -174,3 +174,18 @@ func TestRunPoolHandlesEmptyInput(t *testing.T) {
 		t.Fatalf("runPool(empty) returned %#v, want empty result", got)
 	}
 }
+
+
+func TestFallbackARecordContentKeepsAllUniqueFinalNodes(t *testing.T) {
+ nodes := []string{
+  "192.0.2.1:443#US",
+  "192.0.2.2:443#JP",
+  "192.0.2.1:8443#US",
+  "192.0.2.3:443#DE",
+ }
+ got := fallbackARecordContent(nodes)
+ want := []string{"192.0.2.1", "192.0.2.2", "192.0.2.3"}
+ if !reflect.DeepEqual(got, want) {
+  t.Fatalf("fallbackARecordContent() = %#v, want %#v", got, want)
+ }
+}
