@@ -35,4 +35,4 @@ https://raw.githubusercontent.com/RikkaSaiko1/CloudFlare-ip/refs/heads/main/ip.t
 - Windows PowerShell：运行 `.\\run.ps1`。
 - 带宽测速仍需要系统已安装 `curl`；GitHub 同步需要 `git` 命令可用。
 - GitHub 同步的认证参数从现有 `git_sync.sh`（Linux / Termux）或 `git_sync.ps1`（Windows）读取，实际同步流程由 Go 程序执行。
-- 原 `main.py` 暂时保留在此迁移分支中，供逐项对照原逻辑；运行入口是 `main.go`。
+- 此分支运行入口为 `main.go`，不依赖 Python；原版 Python 源码仍保留在 `main` 分支，供必要时对照。
