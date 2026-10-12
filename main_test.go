@@ -205,3 +205,21 @@ func TestRequestWithTotalTimeout(t *testing.T) {
   t.Fatal("requestWithTotalTimeout() succeeded despite total timeout")
  }
 }
+
+
+func TestRequestNoRedirectReturnsRedirectResponse(t *testing.T) {
+ destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+  w.WriteHeader(http.StatusOK)
+  _, _ = w.Write([]byte("destination"))
+ }))
+ defer destination.Close()
+ redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+  http.Redirect(w, r, destination.URL, http.StatusFound)
+ }))
+ defer redirect.Close()
+ resp, _, err := requestNoRedirect("GET", redirect.URL, nil, nil, time.Second, time.Second)
+ if err != nil { t.Fatalf("requestNoRedirect() error = %v", err) }
+ if resp.StatusCode != http.StatusFound {
+  t.Fatalf("requestNoRedirect() followed redirect: status = %d, want %d", resp.StatusCode, http.StatusFound)
+ }
+}
