@@ -1011,60 +1011,81 @@ func syncSetting(script, key string) string {
  return strings.TrimSpace(match[1])
 }
 
-func runSyncCommand(ctx context.Context, args []string, token string) error {
- cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+func runGitCommand(ctx context.Context, args []string, token string) error {
+ cmd := exec.CommandContext(ctx, "git", args...)
  cmd.Dir = root
  output, err := cmd.CombinedOutput()
- safeOutput := strings.ReplaceAll(string(output), token, "***")
- if strings.TrimSpace(safeOutput) != "" { logf("%s\n", strings.TrimSpace(safeOutput)) }
+ outputText := strings.ReplaceAll(string(output), token, "***")
+ if strings.TrimSpace(outputText) != "" {
+  logf("%s", outputText)
+  if !strings.HasSuffix(outputText, "\n") { logf("\n") }
+ }
  return err
 }
 
 func syncGitHub() {
+ // Keep the existing per-platform config files as the source of credentials,
+ // but execute the sync workflow directly from Go instead of launching Bash/PowerShell.
  scriptName := "git_sync.sh"
- var commandPrefix []string
- if runtime.GOOS == "windows" {
-  scriptName = "git_sync.ps1"
-  commandPrefix = []string{"powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"}
- } else {
-  commandPrefix = []string{"bash"}
- }
+ if runtime.GOOS == "windows" { scriptName = "git_sync.ps1" }
  scriptPath := filepath.Join(root, scriptName)
- if _, err := os.Stat(scriptPath); err != nil {
+ scriptData, err := os.ReadFile(scriptPath)
+ if err != nil {
   logf("未找到 %s，跳过 GitHub 同步。\n", scriptName)
   return
  }
- scriptData, _ := os.ReadFile(scriptPath)
- syncToken := syncSetting(string(scriptData), "github_token")
- if runtime.GOOS != "windows" {
-  _ = os.Chmod(scriptPath, 0755)
+ script := string(scriptData)
+ token := syncSetting(script, "github_token")
+ username := syncSetting(script, "github_username")
+ repoName := syncSetting(script, "repo_name")
+ branch := syncSetting(script, "branch")
+ if token == "" || username == "" || repoName == "" || branch == "" {
+  logf("GitHub 同步配置不完整，请检查 %s 中的 Token、用户名、仓库名和分支。\n", scriptName)
+  notify("GitHub 同步配置不完整，请检查 Token、用户名、仓库名和分支。", "GitHub 同步配置错误")
+  return
  }
+ pushURL := "https://" + url.PathEscape(token) + "@github.com/" + url.PathEscape(username) + "/" + url.PathEscape(repoName) + ".git"
  retries := integer("GITHUB_SYNC_MAX_RETRIES")
  if retries < 1 { retries = 1 }
  timeout := duration("GIT_SYNC_PROCESS_TIMEOUT", 180)
  for attempt := 1; attempt <= retries; attempt++ {
   logf("\n正在同步到 GitHub (尝试 %d/%d)...\n", attempt, retries)
   ctx, cancel := context.WithTimeout(context.Background(), timeout)
-  args := append(append([]string{}, commandPrefix...), scriptPath)
-  cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-  cmd.Dir = root
-  output, err := cmd.CombinedOutput()
+  failedStep := ""
+  if err := runGitCommand(ctx, []string{"pull", "origin", branch}, token); err != nil {
+   failedStep = "git pull"
+   logf("拉取远程分支失败：%v\n", err)
+  }
+  if failedStep == "" {
+   if err := runGitCommand(ctx, []string{"add", "ip.txt"}, token); err != nil {
+    failedStep = "git add"
+    logf("暂存 ip.txt 失败：%v\n", err)
+   }
+  }
+  if failedStep == "" {
+   commitMessage := "Update ip.txt on " + time.Now().Format("2006-01-02 15:04:05")
+   if err := runGitCommand(ctx, []string{"commit", "-m", commitMessage}, token); err != nil {
+    // A clean working tree is not a failure; still push the current branch.
+    status, statusErr := exec.CommandContext(ctx, "git", "status", "--porcelain", "--", "ip.txt").Output()
+    if statusErr != nil || strings.TrimSpace(string(status)) != "" {
+     failedStep = "git commit"
+     logf("提交 ip.txt 失败：%v\n", err)
+    }
+   }
+  }
+  if failedStep == "" {
+   if err := runGitCommand(ctx, []string{"push", pushURL, branch, "--force"}, token); err != nil {
+    failedStep = "git push"
+    logf("推送到 GitHub 失败：%v\n", err)
+   }
+  }
   timedOut := ctx.Err() == context.DeadlineExceeded
   cancel()
-  if len(output) > 0 {
-   outputText := string(output)
-   if syncToken != "" { outputText = strings.ReplaceAll(outputText, syncToken, "***") }
-   logf("%s", outputText)
-  }
-  if err == nil {
+  if failedStep == "" {
    logf("已自动推送到 GitHub。\n")
    return
   }
-  if timedOut {
-   logf("推送超时（超过 %s）\n", timeout)
-  } else {
-   logf("推送失败：%v\n", err)
-  }
+  if timedOut { logf("GitHub 同步超时（超过 %s）\n", timeout) }
   if attempt < retries { sleepSec("GITHUB_SYNC_RETRY_DELAY") }
  }
  notify("GitHub 推送失败，已重试 "+strconv.Itoa(retries)+" 次，请检查网络或仓库状态。", "GitHub 推送失败")
