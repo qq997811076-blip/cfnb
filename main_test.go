@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -101,4 +102,44 @@ func TestSourceEnabledDefault(t *testing.T) {
  var disabled Source
  if err := json.Unmarshal([]byte(`{"url":"https://example.com","enabled":false}`), &disabled); err != nil { t.Fatal(err) }
  if disabled.Enabled == nil || *disabled.Enabled { t.Fatalf("explicit false should be preserved, got %#v", disabled.Enabled) }
+}
+
+
+func TestWriteIPPreservesConfiguredFormatting(t *testing.T) {
+	oldRoot, oldConfig := root, cfg
+	root = t.TempDir()
+	cfg = Config{
+		"OUTPUT_FILE": "ip.txt",
+		"AD_HEADER_ENABLED": true,
+		"AD_HEADER_LINES": []any{"# header"},
+		"AD_FOOTER_ENABLED": true,
+		"AD_FOOTER_LINES": []any{"# footer"},
+		"AD_PERLINE_ENABLED": true,
+		"AD_PERLINE_TEXT": " | checked",
+		"IP_TXT_SHOW_BANDWIDTH": true,
+		"IP_TXT_SHOW_HTTP_LATENCY": true,
+		"IP_TXT_SHOW_HTTP_JITTER": true,
+		"IP_TXT_SHOW_LATENCY": true,
+	}
+	t.Cleanup(func() { root, cfg = oldRoot, oldConfig })
+
+	node := "192.0.2.1:443#US"
+	err := writeIP(
+		[]string{node},
+		map[string]float64{node: 12.34},
+		map[string]float64{node: 0.012},
+		map[string]float64{node: 20.5},
+		map[string]float64{node: 1.25},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "ip.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# header\n192.0.2.1:443#US 12.34 Mbps 20.50 ms 1.25 ms 12.00 ms | checked\n# footer\n"
+	if string(data) != want {
+		t.Fatalf("output = %q, want %q", string(data), want)
+	}
 }
