@@ -244,7 +244,7 @@
     "IP_CALIBRATION_CONCURRENCY": 300,
     "_comment_IP_CALIBRATION_CONCURRENCY": "地区校准的并发查询数（根据 token 数量调整）",
 
-    "MAX_WORKERS": 300,
+    "MAX_WORKERS": 200,
     "_comment_MAX_WORKERS": "TCP 并发测试的最大线程数",
 
     "AVAILABILITY_WORKERS": 32,
