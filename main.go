@@ -1365,7 +1365,7 @@ func main() {
    sort.SliceStable(selected,func(i,j int)bool{return score[selected[i]]>score[selected[j]]})
   }
  }
- logf("\n================ 最终优选节点 ================\n");for i,n:=range selected{line:=fmt.Sprintf("%d. %s",i+1,n);if v,ok:=speed[n];ok{line+=fmt.Sprintf(" 速度 %.2f Mbps",v)};if v,ok:=httpLat[n];ok{line+=fmt.Sprintf(" HTTP延迟 %.2f ms",v)};if v,ok:=jitter[n];ok{line+=fmt.Sprintf(" 抖动 %.2f ms",v)};if v,ok:=latency[n];ok{line+=fmt.Sprintf(" TCP延迟 %.2f ms",v*1000)};logf("%s\n",line)}
+ logf("\n================ 最终优选节点 ================\n");for i,n:=range selected{line:=fmt.Sprintf("%d. %s 速度 %.2f Mbps",i+1,n,speed[n]);if v,ok:=httpLat[n];ok{line+=fmt.Sprintf(" 延迟 %.2f ms",v)};if v,ok:=jitter[n];ok{line+=fmt.Sprintf(" 抖动 %.2f ms",v)};if v,ok:=latency[n];ok{line+=fmt.Sprintf(" 延迟 %.2f ms",v*1000)};logf("%s\n",line)}
  if e:=writeIP(selected,speed,latency,httpLat,jitter);e!=nil{logf("写入结果失败: %v\n",e);return};logf("结果已保存到 %s（共 %d 个节点）\n",str("OUTPUT_FILE"),len(selected))
  ipList:=[]string{};for _,n:=range selected{p:=strings.SplitN(n,":",2);ipList=append(ipList,p[0])}
  updateDNS(selected,bwBySpeed,avMap,latency,httpLat,jitter,speed)
