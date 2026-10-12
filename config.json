@@ -244,8 +244,8 @@
     "IP_CALIBRATION_CONCURRENCY": 300,
     "_comment_IP_CALIBRATION_CONCURRENCY": "地区校准的并发查询数（根据 token 数量调整）",
 
-    "MAX_WORKERS": 300,
-    "_comment_MAX_WORKERS": "TCP 并发测试的最大任务数（Go TCP 引擎，默认 1000）",
+    "MAX_WORKERS": 50,
+    "_comment_MAX_WORKERS": "TCP 并发测试最大任务数（安全上限 50，降低手机卡顿风险）",
 
     "AVAILABILITY_WORKERS": 32,
     "_comment_AVAILABILITY_WORKERS": "可用性检测的并发线程数",
