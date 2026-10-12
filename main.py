@@ -1088,6 +1088,55 @@ def calibrate_regions(nodes, token_file, cache_file):
 
 # =========================== 核心测试、筛选、测速及更新函数 ===========================
 
+def run_go_tcp_checker(nodes):
+    """调用本目录的 Go TCP 测试器；其他筛选、测速和上传流程仍由 Python 执行。"""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    source = os.path.join(script_dir, "tcp_checker.go")
+    binary_name = "tcp_checker.exe" if sys.platform == "win32" else "tcp_checker"
+    binary = os.path.join(script_dir, binary_name)
+
+    if not os.path.isfile(source):
+        raise FileNotFoundError(f"找不到 Go TCP 测试器源码：{source}")
+
+    # 仅在二进制不存在或 Go 源码更新时重新编译。
+    if (not os.path.isfile(binary) or
+            os.path.getmtime(source) > os.path.getmtime(binary)):
+        print("正在编译 Go TCP 测试器（首次运行需要编译）...")
+        build = subprocess.run(
+            ["go", "build", "-o", binary, source],
+            cwd=script_dir, capture_output=True, text=True
+        )
+        if build.returncode != 0:
+            detail = (build.stderr or build.stdout or "未知编译错误").strip()
+            raise RuntimeError("Go TCP 测试器编译失败，请确认已安装 Go：\n" + detail)
+
+    request_data = {
+        "nodes": nodes,
+        "timeout": TIMEOUT,
+        "probes": TCP_PROBES,
+        "min_success_rate": MIN_SUCCESS_RATE,
+        "max_workers": MAX_WORKERS,
+    }
+    completed = subprocess.run(
+        [binary],
+        input=json.dumps(request_data, ensure_ascii=False),
+        capture_output=True, text=True, cwd=script_dir
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "未知运行错误").strip()
+        raise RuntimeError("Go TCP 测试器运行失败：\n" + detail)
+
+    try:
+        raw_results = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Go TCP 测试器返回的数据格式不正确。") from exc
+
+    return [
+        (item["node"], float(item["latency"]), item["country"], int(item["success"]))
+        for item in raw_results
+    ]
+
+
 def test_tcp_latency(ip, port, timeout=TIMEOUT, probes=TCP_PROBES):
     max_latency = 0.0
     success = 0
@@ -1838,22 +1887,14 @@ def main():
     total = len(nodes)
     print(f"开始 TCP 连接测试（超时 {TIMEOUT}s，并发 {MAX_WORKERS}）...")
 
-    results = []
-    completed = 0
-    last_print = time.time()
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {executor.submit(test_node, node): node for node in nodes}
-        for future in as_completed(futures):
-            completed += 1
-            res = future.result()
-            if res:
-                results.append(res)
-            now = time.time()
-            if now - last_print >= PROGRESS_PRINT_INTERVAL or completed == total:
-                print(f"\r进度：{completed}/{total} ({(completed/total)*100:.1f}%)", end="", flush=True)
-                last_print = now
+    try:
+        results = run_go_tcp_checker(nodes)
+    except Exception as e:
+        print(f"\nGo TCP 测试失败：{e}")
+        sys.exit(1)
 
-    print("\nTCP 测试完成！")
+    print(f"TCP 测试完成！通过 {len(results)}/{total} 个节点。")
+
     if not results:
         print("没有通过成功率筛选的节点，请检查网络或降低 MIN_SUCCESS_RATE。")
         sys.exit(0)
