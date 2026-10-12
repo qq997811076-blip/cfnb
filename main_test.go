@@ -31,6 +31,7 @@ func TestRiskScore(t *testing.T) {
 		want  float64
 	}{
 		{"0.4 (low)", 0.4},
+		{"prefix 0.4 (low)", 0},
 		{"0.125", 0.125},
 		{"", 0},
 	}
