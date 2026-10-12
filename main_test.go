@@ -66,3 +66,15 @@ func TestWriteCacheSortsIPv4Numerically(t *testing.T) {
   t.Fatalf("cache order = %#v, want %#v", got, want)
  }
 }
+
+func TestSyncSettingReadsShellAndPowerShell(t *testing.T) {
+ shell := "github_token=\"token-value\"\ngithub_username=\"owner\"\nrepo_name=\"repo\"\nbranch=\"main\"\n"
+ powershell := "$github_token = \"token-value\"\r\n$github_username = \"owner\"\r\n$repo_name = \"repo\"\r\n$branch = \"main\"\r\n"
+ for _, source := range []string{shell, powershell} {
+  for key, want := range map[string]string{"github_token": "token-value", "github_username": "owner", "repo_name": "repo", "branch": "main"} {
+   if got := syncSetting(source, key); got != want {
+    t.Errorf("syncSetting(%q) = %q, want %q", key, got, want)
+   }
+  }
+ }
+}
