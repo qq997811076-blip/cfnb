@@ -545,6 +545,7 @@ var codeSet = map[string]bool{}
 var nodePattern = regexp.MustCompile(`^(\d+\.\d+\.\d+\.\d+):(\d+)#(.+)$`)
 var ipPortPattern = regexp.MustCompile(`^(\d+\.\d+\.\d+\.\d+):(\d+)#`)
 var muLog sync.Mutex
+var logInitialized bool
 
 func init() {
  for _, code := range cnToCode { codeSet[code] = true }
@@ -557,7 +558,22 @@ func number(k string) float64 { switch v:=cfg[k].(type) { case float64:return v;
 func integer(k string) int { return int(number(k)) }
 func stringsVal(k string) []string { v,ok:=cfg[k].([]any); if !ok { if s,ok2:=cfg[k].([]string);ok2{return s}; return nil }; out:=make([]string,0,len(v)); for _,x:=range v {out=append(out,fmt.Sprint(x))};return out }
 func duration(k string, fallback float64) time.Duration { n:=number(k); if n<=0 {n=fallback}; return time.Duration(n*float64(time.Second)) }
-func logf(format string,args ...any) { muLog.Lock(); defer muLog.Unlock(); line:=fmt.Sprintf(format,args...); fmt.Print(line); if boolean("ENABLE_LOGGING") { f,e:=os.OpenFile(filepath.Join(root,str("LOG_FILE")),os.O_CREATE|os.O_APPEND|os.O_WRONLY,0644); if e==nil { _,_=f.WriteString(line); f.Close() } } }
+func logf(format string, args ...any) {
+ muLog.Lock()
+ defer muLog.Unlock()
+ line := fmt.Sprintf(format, args...)
+ fmt.Print(line)
+ if boolean("ENABLE_LOGGING") {
+  flags := os.O_CREATE | os.O_WRONLY
+  if logInitialized { flags |= os.O_APPEND } else { flags |= os.O_TRUNC }
+  f, err := os.OpenFile(filepath.Join(root, str("LOG_FILE")), flags, 0644)
+  if err == nil {
+   _, _ = f.WriteString(line)
+   _ = f.Close()
+   logInitialized = true
+  }
+ }
+}
 func loadConfig() error {
  p:=filepath.Join(root,"config.json")
  b,e:=os.ReadFile(p)
