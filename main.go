@@ -557,7 +557,14 @@ func boolean(k string) bool { v,ok:=cfg[k].(bool); return ok && v }
 func number(k string) float64 { switch v:=cfg[k].(type) { case float64:return v; case int:return float64(v); case int64:return float64(v); case json.Number:f,_:=v.Float64();return f }; return 0 }
 func integer(k string) int { return int(number(k)) }
 func stringsVal(k string) []string { v,ok:=cfg[k].([]any); if !ok { if s,ok2:=cfg[k].([]string);ok2{return s}; return nil }; out:=make([]string,0,len(v)); for _,x:=range v {out=append(out,fmt.Sprint(x))};return out }
-func duration(k string, fallback float64) time.Duration { n:=number(k); if n<=0 {n=fallback}; return time.Duration(n*float64(time.Second)) }
+func duration(k string, fallback float64) time.Duration {
+ n, exists := cfg[k]
+ if !exists { return time.Duration(fallback * float64(time.Second)) }
+ value := number(k)
+ // Keep explicit zero/negative timeout values instead of silently replacing user settings.
+ _ = n
+ return time.Duration(value * float64(time.Second))
+}
 func logf(format string, args ...any) {
  muLog.Lock()
  defer muLog.Unlock()
@@ -898,9 +905,22 @@ func calibrate(nodes []string) {
   tokenPool := newIPInfoTokenPool(valid)
   for i:=0;i<workers;i++ {wg.Add(1);go func(){defer wg.Done();for ip:=range jobs {tag:=queryIPInfo(ip,tokenPool);results<-result{ip,tag}}}()}
   go func(){for _,ip:=range ips{jobs<-ip};close(jobs);wg.Wait();close(results)}()
+  cacheAppend, cacheOpenErr := os.OpenFile(cachePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+  if cacheOpenErr != nil { logf("无法追加地区校准缓存: %v\n", cacheOpenErr) }
   successCount := 0
-  for r:=range results {atomic.AddInt64(&done,1);if r.tag!=""{successCount++;for _,ipp:=range ipports[r.ip]{cache[ipp]=r.tag}};logf("\r[%d/%d] 地区校准...",atomic.LoadInt64(&done),len(ips))}
+  for r:=range results {
+   atomic.AddInt64(&done,1)
+   if r.tag!="" {
+    successCount++
+    for _,ipp:=range ipports[r.ip] {
+     cache[ipp]=r.tag
+     if cacheAppend != nil { _, _ = fmt.Fprintf(cacheAppend, "%s#%s\n", ipp, r.tag) }
+    }
+   }
+   logf("\r[%d/%d] 地区校准...",atomic.LoadInt64(&done),len(ips))
+  }
   logf("\n")
+  if cacheAppend != nil { _ = cacheAppend.Close() }
   if len(ips) > 0 && successCount == 0 { logf("警告：所有 IP 地区校准失败，可能所有 token 均已失效。\n"); notify("IP地区校准：所有IP查询均失败，可能所有token均已失效。", "IP校准全失败") }
  }
  for i,n:=range nodes {ipp:=strings.SplitN(n,"#",2)[0];if tag:=cache[ipp];tag!=""{nodes[i]=ipp+"#"+strings.Fields(tag)[0]}}
@@ -1185,13 +1205,46 @@ func updateDNS(nodes []string, bw []BWResult, av map[string]AvailabilityResult, 
  notify("Cloudflare DNS 更新失败，请检查配置和网络。", "DNS 更新失败")
 }
 
+func processExists(pid int) bool {
+ if pid <= 0 { return false }
+ pidText := strconv.Itoa(pid)
+ if runtime.GOOS == "windows" {
+  output, err := exec.Command("tasklist", "/FI", "PID eq "+pidText, "/NH").CombinedOutput()
+  if err != nil { return false }
+  for _, field := range strings.Fields(string(output)) { if field == pidText { return true } }
+  return false
+ }
+ if _, err := os.Stat(filepath.Join("/proc", pidText)); err == nil { return true }
+ return exec.Command("kill", "-0", pidText).Run() == nil
+}
+
+func acquireInstanceLock(path string) bool {
+ for attempt := 0; attempt < 2; attempt++ {
+  lock, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+  if err == nil {
+   _, _ = lock.WriteString(strconv.Itoa(os.Getpid()))
+   _ = lock.Close()
+   return true
+  }
+  if !errors.Is(err, os.ErrExist) { return false }
+  data, readErr := os.ReadFile(path)
+  pid, parseErr := strconv.Atoi(strings.TrimSpace(string(data)))
+  if readErr == nil && parseErr == nil && processExists(pid) { return false }
+  // Match the Python advisory lock: an abandoned, unlocked lock file must not block future runs.
+  _ = os.Remove(path)
+ }
+ return false
+}
+
 func main() {
  root,_=filepath.Abs(filepath.Dir(os.Args[0]))
  // go run 时从当前工作目录读取配置，二进制运行时从二进制所在目录读取。
  if _,e:=os.Stat(filepath.Join(root,"config.json"));e!=nil {root,_=os.Getwd()}
  if e:=loadConfig();e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)}
  if boolean("FORCE_DIRECT"){for _,k:=range []string{"HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy","ALL_PROXY","all_proxy"}{_ = os.Unsetenv(k)};_ = os.Setenv("NO_PROXY","*")}
- lockPath:=filepath.Join(root,".run.lock");lock,e:=os.OpenFile(lockPath,os.O_CREATE|os.O_EXCL|os.O_WRONLY,0600);if e!=nil{logf("检测到本程序已在运行或锁文件残留，本次启动自动退出。\n");return};_,_=lock.WriteString(strconv.Itoa(os.Getpid()));lock.Close();defer os.Remove(lockPath)
+ lockPath:=filepath.Join(root,".run.lock")
+ if !acquireInstanceLock(lockPath) { logf("检测到本程序已在运行，本次启动自动退出。\n"); return }
+ defer os.Remove(lockPath)
  mode:="全局最优"+strconv.Itoa(integer("GLOBAL_TOP_N"))+"个";if !boolean("USE_GLOBAL_MODE"){mode="每个国家最优"+strconv.Itoa(integer("PER_COUNTRY_TOP_N"))+"个"}
  logf("当前模式：%s，每个节点测试 %d 次 TCP 连接\n",mode,integer("TCP_PROBES"));logf("最低成功率要求：%.0f%%\n",number("MIN_SUCCESS_RATE")*100)
  nodes:=fetchSources();if len(nodes)==0{logf("没有获取到任何有效节点，退出。\n");return}
