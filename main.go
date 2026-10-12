@@ -635,24 +635,41 @@ func notify(content,summary string) {
  if e!=nil {logf("微信通知异常: %v\n",e)} else if resp.StatusCode==200 {logf("微信通知已发送\n")} else {logf("微信通知发送失败: %d\n",resp.StatusCode)}
 }
 func extractCountryCode(label string) string {
- label=strings.TrimSpace(label); if label=="" {return ""}
- re:=regexp.MustCompile(`[\s,;|/]+`)
- for _,tok:=range re.Split(label,-1) {
-  tok=regexp.MustCompile(`^[\d\s\-_.|#]+`).ReplaceAllString(strings.TrimSpace(tok),"")
-  m:=regexp.MustCompile(`^([A-Z]{3})`).FindStringSubmatch(tok)
-  if len(m)>1 && (len(tok)==3 || tok[1]<'A' || tok[1]>'Z') {if c:=alpha3ToAlpha2[m[1]];c!=""{return c}}
-  m=regexp.MustCompile(`^([A-Z]{2})`).FindStringSubmatch(tok)
-  if len(m)>1 && (len(tok)==2 || tok[2]<'A' || tok[2]>'Z') && codeSet[m[1]] {return m[1]}
+ label = strings.TrimSpace(label)
+ if label == "" { return "" }
+ separators := regexp.MustCompile(`[\s,;|/]+`)
+ tokens := separators.Split(label, -1)
+ alpha3Pattern := regexp.MustCompile("^([A-Z]{3})([^A-Za-z]|$)")
+ alpha2Pattern := regexp.MustCompile("^([A-Z]{2})([^A-Za-z]|$)")
+ leadingNoise := regexp.MustCompile("^[\\d\\s\\-_.|#]+")
+ chineseRuns := regexp.MustCompile("[\\x{4e00}-\\x{9fff}（）()]+")
+ for _, token := range tokens {
+  cleaned := leadingNoise.ReplaceAllString(strings.TrimSpace(token), "")
+  if match := alpha3Pattern.FindStringSubmatch(cleaned); len(match) > 1 {
+   if code := alpha3ToAlpha2[match[1]]; code != "" { return code }
+  }
+  if match := alpha2Pattern.FindStringSubmatch(cleaned); len(match) > 1 {
+   if codeSet[match[1]] { return match[1] }
+  }
  }
- for _,tok:=range re.Split(label,-1) {
-  tok=regexp.MustCompile(`^[\d\s\-_.|#]+`).ReplaceAllString(tok,"")
-  for name,code:=range cnToCode {if strings.Contains(tok,name){return code}}
+ for _, token := range tokens {
+  cleaned := leadingNoise.ReplaceAllString(token, "")
+  for _, candidate := range chineseRuns.FindAllString(cleaned, -1) {
+   if code := cnToCode[candidate]; code != "" { return code }
+  }
  }
- // Regional indicator flag emoji (first two indicators)
- var indicators []rune; for _,r:=range label {if r>=0x1F1E6 && r<=0x1F1FF {indicators=append(indicators,r)}}
- if len(indicators)>=2 {return string([]rune{rune('A')+indicators[0]-0x1F1E6,rune('A')+indicators[1]-0x1F1E6})}
+ indicators := []rune{}
+ for _, r := range label {
+  if r >= 0x1F1E6 && r <= 0x1F1FF { indicators = append(indicators, r) }
+ }
+ if len(indicators) >= 2 && len(indicators)%2 == 0 {
+  first := indicators[0] - 0x1F1E6
+  second := indicators[1] - 0x1F1E6
+  if first <= 25 && second <= 25 { return string([]rune{'A' + first, 'A' + second}) }
+ }
  return ""
 }
+
 func queryCountry(ip,port string) string {
  u,_:=url.Parse(str("AVAILABILITY_CHECK_API")); q:=u.Query();q.Set("proxyip",ip+":"+port);u.RawQuery=q.Encode()
  resp,b,e:=request("GET",u.String(),nil,nil,duration("AVAILABILITY_CONNECT_TIMEOUT",3),duration("AVAILABILITY_TIMEOUT",3))
