@@ -545,6 +545,10 @@ var nodePattern = regexp.MustCompile(`^(\d+\.\d+\.\d+\.\d+):(\d+)#(.+)$`)
 var ipPortPattern = regexp.MustCompile(`^(\d+\.\d+\.\d+\.\d+):(\d+)#`)
 var muLog sync.Mutex
 
+func init() {
+ for _, code := range cnToCode { codeSet[code] = true }
+}
+
 func val(k string) any { return cfg[k] }
 func str(k string) string { if v,ok:=cfg[k].(string); ok{return v}; return fmt.Sprint(cfg[k]) }
 func boolean(k string) bool { v,ok:=cfg[k].(bool); return ok && v }
@@ -699,7 +703,22 @@ func fetchSources() []string {
 }
 func loadLines(path string) []string {b,e:=os.ReadFile(path);if e!=nil{return nil};out:=[]string{};for _,s:=range strings.Split(string(b),"\n"){s=strings.TrimSpace(s);if s!=""{out=append(out,s)}};return out}
 func readCache(path string) map[string]string {out:=map[string]string{};for _,line:=range loadLines(path){p:=strings.SplitN(line,"#",2);if len(p)==2{out[strings.TrimSpace(p[0])]=strings.TrimSpace(p[1])}};return out}
-func writeCache(path string, rows map[string]string) {keys:=make([]string,0,len(rows));for k:=range rows{keys=append(keys,k)};sort.Strings(keys);var b strings.Builder;for _,k:=range keys{b.WriteString(k+"#"+rows[k]+"\n")};_ = os.WriteFile(path,[]byte(b.String()),0644)}
+func writeCache(path string, rows map[string]string) {
+ keys := make([]string, 0, len(rows))
+ for key := range rows { keys = append(keys, key) }
+ sort.Slice(keys, func(i, j int) bool {
+  ipI := strings.SplitN(keys[i], ":", 2)[0]
+  ipJ := strings.SplitN(keys[j], ":", 2)[0]
+  a, b := net.ParseIP(ipI), net.ParseIP(ipJ)
+  if a != nil && b != nil { return bytes.Compare(a.To16(), b.To16()) < 0 }
+  if a != nil { return true }
+  if b != nil { return false }
+  return keys[i] < keys[j]
+ })
+ var out strings.Builder
+ for _, key := range keys { out.WriteString(key + "#" + rows[key] + "\n") }
+ _ = os.WriteFile(path, []byte(out.String()), 0644)
+}
 type ipInfoToken struct {
  token string
  failures int
