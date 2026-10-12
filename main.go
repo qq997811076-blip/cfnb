@@ -1110,7 +1110,7 @@ func main() {
  if _,e:=exec.LookPath("curl");e!=nil{logf("未检测到 curl 命令，带宽测速将跳过。\n")}
  bw:=[]BWResult{}
  for attempt:=1;attempt<=integer("BANDWIDTH_RETRY_MAX");attempt++ {logf("[带宽测速] 第 %d 轮测试...\n",attempt);arr:=runPool(afterHTTP,integer("BANDWIDTH_WORKERS"),bandwidth,"带宽测速");bw=nil;for _,r:=range arr{if r.Speed>0{bw=append(bw,r)}};sort.SliceStable(bw,func(i,j int)bool{return bw[i].Speed>bw[j].Speed});if len(bw)>0{break};if attempt<integer("BANDWIDTH_RETRY_MAX"){sleepSec("BANDWIDTH_RETRY_DELAY")}}
- speed:=map[string]float64{};selected:=[]string{}
+ bwBySpeed:=append([]BWResult(nil),bw...);speed:=map[string]float64{};selected:=[]string{}
  if len(bw)==0 {logf("带宽测速多次重试仍无有效结果，将使用 TCP 筛选结果作为最终节点。\n");notify("带宽测速全部失败，已降级使用 TCP 排序节点。","带宽测速全部失败");if boolean("USE_GLOBAL_MODE"){for _,r:=range results{if len(selected)>=integer("GLOBAL_TOP_N"){break};selected=append(selected,r.Node)}}else{for _,rs:=range countryNodes{sort.SliceStable(rs,func(i,j int)bool{if rs[i].Success!=rs[j].Success{return rs[i].Success>rs[j].Success};return rs[i].Latency<rs[j].Latency});for i:=0;i<min(integer("PER_COUNTRY_TOP_N"),len(rs));i++{selected=append(selected,rs[i].Node)}}}
  } else {
   for _,r:=range bw{speed[r.Node]=r.Speed}
@@ -1121,6 +1121,6 @@ func main() {
  logf("\n================ 最终优选节点 ================\n");for i,n:=range selected{line:=fmt.Sprintf("%d. %s",i+1,n);if v,ok:=speed[n];ok{line+=fmt.Sprintf(" 速度 %.2f Mbps",v)};if v,ok:=httpLat[n];ok{line+=fmt.Sprintf(" HTTP延迟 %.2f ms",v)};if v,ok:=jitter[n];ok{line+=fmt.Sprintf(" 抖动 %.2f ms",v)};if v,ok:=latency[n];ok{line+=fmt.Sprintf(" TCP延迟 %.2f ms",v*1000)};logf("%s\n",line)}
  if e:=writeIP(selected,speed,latency,httpLat,jitter);e!=nil{logf("写入结果失败: %v\n",e);return};logf("结果已保存到 %s（共 %d 个节点）\n",str("OUTPUT_FILE"),len(selected))
  ipList:=[]string{};for _,n:=range selected{p:=strings.SplitN(n,":",2);ipList=append(ipList,p[0])}
- updateDNS(selected,bw,avMap,latency,httpLat,jitter,speed)
+ updateDNS(selected,bwBySpeed,avMap,latency,httpLat,jitter,speed)
  syncGitHub()
 }
