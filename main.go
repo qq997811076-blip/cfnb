@@ -686,7 +686,7 @@ func fetchSources() []string {
  for _,s:=range sources {if !s.Enabled||s.URL==""{continue}
   for attempt:=1;attempt<=integer("FETCH_MAX_RETRIES");attempt++ {
    logf("正在请求数据源 %s (尝试 %d/%d) ...\n",s.URL,attempt,integer("FETCH_MAX_RETRIES"))
-   resp,b,e:=request("GET",s.URL,map[string]string{"Accept-Encoding":"gzip, deflate"},nil,duration("FETCH_CONNECT_TIMEOUT",3),duration("FETCH_TIMEOUT",3))
+   resp,b,e:=request("GET",s.URL,nil,nil,duration("FETCH_CONNECT_TIMEOUT",3),duration("FETCH_TIMEOUT",3))
    if e==nil&&resp.StatusCode>=200&&resp.StatusCode<300 {
     found:=parseAdaptive(string(b));logf("从 %s 解析出 %d 个节点。\n",s.URL,len(found))
     for _,n:=range found {key:=strings.SplitN(n,"#",2)[0];if !seen[key]{seen[key]=true;nodes=append(nodes,n)}};break
@@ -700,12 +700,102 @@ func fetchSources() []string {
 func loadLines(path string) []string {b,e:=os.ReadFile(path);if e!=nil{return nil};out:=[]string{};for _,s:=range strings.Split(string(b),"\n"){s=strings.TrimSpace(s);if s!=""{out=append(out,s)}};return out}
 func readCache(path string) map[string]string {out:=map[string]string{};for _,line:=range loadLines(path){p:=strings.SplitN(line,"#",2);if len(p)==2{out[strings.TrimSpace(p[0])]=strings.TrimSpace(p[1])}};return out}
 func writeCache(path string, rows map[string]string) {keys:=make([]string,0,len(rows));for k:=range rows{keys=append(keys,k)};sort.Strings(keys);var b strings.Builder;for _,k:=range keys{b.WriteString(k+"#"+rows[k]+"\n")};_ = os.WriteFile(path,[]byte(b.String()),0644)}
+type ipInfoToken struct {
+ token string
+ failures int
+ cooldownUntil time.Time
+ lastRequest time.Time
+ rateMu sync.Mutex
+}
+type ipInfoTokenPool struct {
+ mu sync.Mutex
+ tokens []*ipInfoToken
+ current int
+ failureThreshold int
+ minInterval time.Duration
+}
+func newIPInfoTokenPool(tokens []string) *ipInfoTokenPool {
+ states := make([]*ipInfoToken, 0, len(tokens))
+ for _, token := range tokens { states = append(states, &ipInfoToken{token: token}) }
+ threshold := integer("TOKEN_FAILURE_THRESHOLD")
+ if threshold < 2 { threshold = 2 }
+ return &ipInfoTokenPool{tokens: states, failureThreshold: threshold, minInterval: time.Duration(number("IP_CALIBRATION_MIN_INTERVAL") * float64(time.Second))}
+}
+func (p *ipInfoTokenPool) acquire() (int, *ipInfoToken) {
+ p.mu.Lock()
+ defer p.mu.Unlock()
+ now := time.Now()
+ for i := 0; i < len(p.tokens); i++ {
+  p.current = (p.current + 1) % len(p.tokens)
+  state := p.tokens[p.current]
+  if state.failures < p.failureThreshold && !state.cooldownUntil.After(now) { return p.current, state }
+ }
+ best := 0
+ for i := 1; i < len(p.tokens); i++ { if p.tokens[i].failures < p.tokens[best].failures { best = i } }
+ p.current = best
+ return best, p.tokens[best]
+}
+func (p *ipInfoTokenPool) rateLimit(state *ipInfoToken) {
+ state.rateMu.Lock()
+ defer state.rateMu.Unlock()
+ if !state.lastRequest.IsZero() {
+  wait := state.lastRequest.Add(p.minInterval).Sub(time.Now())
+  if wait > 0 { time.Sleep(wait) }
+ }
+ state.lastRequest = time.Now()
+}
+func (p *ipInfoTokenPool) cool(idx int, d time.Duration, failed bool) {
+ p.mu.Lock()
+ defer p.mu.Unlock()
+ state := p.tokens[idx]
+ state.cooldownUntil = time.Now().Add(d)
+ if failed { state.failures++ }
+}
+func (p *ipInfoTokenPool) markSuccess(idx int) {
+ p.mu.Lock()
+ p.tokens[idx].failures = 0
+ p.mu.Unlock()
+}
+func queryIPInfo(ip string, pool *ipInfoTokenPool) string {
+ if pool == nil || len(pool.tokens) == 0 { return "" }
+ attempts := max(3, min(len(pool.tokens), 10))
+ for attempt := 0; attempt < attempts; attempt++ {
+  idx, state := pool.acquire()
+  pool.rateLimit(state)
+  target := "https://ipinfo.io/" + url.PathEscape(ip) + "/json?token=" + url.QueryEscape(state.token)
+  resp, body, err := request("GET", target, nil, nil, 5*time.Second, 5*time.Second)
+  if err != nil { pool.cool(idx, 300*time.Millisecond, false); continue }
+  if resp.StatusCode == http.StatusTooManyRequests { pool.cool(idx, time.Second, false); continue }
+  if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden { pool.cool(idx, 0, true); continue }
+  if resp.StatusCode < 200 || resp.StatusCode >= 300 { pool.cool(idx, 300*time.Millisecond, false); continue }
+  var data map[string]any
+  if json.Unmarshal(body, &data) != nil { pool.cool(idx, 300*time.Millisecond, false); continue }
+  country, _ := data["country"].(string)
+  if country == "" { continue }
+  pool.markSuccess(idx)
+  parts := []string{country}
+  for _, key := range []string{"region", "city"} {
+   if value, ok := data[key].(string); ok && strings.TrimSpace(value) != "" { parts = append(parts, strings.TrimSpace(value)) }
+  }
+  org, _ := data["org"].(string)
+  asn, isp := "Unknown", org
+  if strings.HasPrefix(org, "AS") {
+   fields := strings.Fields(org)
+   if len(fields) > 0 { asn = fields[0]; isp = strings.TrimSpace(strings.TrimPrefix(org, fields[0])) }
+  }
+  if asn != "Unknown" { parts = append(parts, asn) }
+  if isp != "" { parts = append(parts, isp) }
+  return strings.Join(parts, " ")
+ }
+ return ""
+}
+
 func calibrate(nodes []string) {
  if !boolean("IP_CALIBRATION_ENABLED"){logf("IP 地区校准已禁用，跳过。\n");return}
  tokenPath:=filepath.Join(root,str("IP_CALIBRATION_TOKEN_FILE"));cachePath:=filepath.Join(root,str("IP_CALIBRATION_CACHE_FILE"));cache:=readCache(cachePath)
  for i,n:=range nodes {ipp:=strings.SplitN(n,"#",2)[0];if tag:=cache[ipp];tag!=""{nodes[i]=ipp+"#"+strings.Fields(tag)[0]}}
  tokens:=loadLines(tokenPath);if len(tokens)==0{logf("valid_tokens.txt 为空，IP 地区校准跳过。\n");return}
- logf("正在进行 token 有效性校验...\\n")
+ logf("正在进行 token 有效性校验...\n")
  workers := integer("IP_CALIBRATION_CONCURRENCY")
  if workers < 1 { workers = 1 }
  tokenOK := runPool(tokens, workers, func(t string) bool {
@@ -729,7 +819,8 @@ func calibrate(nodes []string) {
   logf("检测到 %d 个唯一 IP，开始地区查询...\n",len(ips))
   workers:=integer("IP_CALIBRATION_CONCURRENCY");if workers<1{workers=1};workers=min(workers,len(ips))
   type result struct{ip,tag string};jobs:=make(chan string);results:=make(chan result,len(ips));var wg sync.WaitGroup;var done int64
-  for i:=0;i<workers;i++ {wg.Add(1);go func(){defer wg.Done();for ip:=range jobs {tag:="";for _,token:=range valid {u:="https://ipinfo.io/"+url.PathEscape(ip)+"/json?token="+url.QueryEscape(token);resp,b,e:=request("GET",u,nil,nil,5*time.Second,5*time.Second);if e==nil&&resp.StatusCode==200{var d map[string]any;_ = json.Unmarshal(b,&d);country:=fmt.Sprint(d["country"]);if country!=""&&country!="<nil>"{parts:=[]string{country};for _,k:=range []string{"region","city","org"}{if s:=strings.TrimSpace(fmt.Sprint(d[k]));s!=""&&s!="<nil>"{parts=append(parts,s)}};tag=strings.Join(parts," ");break}}};results<-result{ip,tag}}}()}
+  tokenPool := newIPInfoTokenPool(valid)
+  for i:=0;i<workers;i++ {wg.Add(1);go func(){defer wg.Done();for ip:=range jobs {tag:=queryIPInfo(ip,tokenPool);results<-result{ip,tag}}}()}
   go func(){for _,ip:=range ips{jobs<-ip};close(jobs);wg.Wait();close(results)}()
   for r:=range results {atomic.AddInt64(&done,1);if r.tag!=""{for _,ipp:=range ipports[r.ip]{cache[ipp]=r.tag}};logf("\r[%d/%d] 地区校准...",atomic.LoadInt64(&done),len(ips))}
   logf("\n")
@@ -811,7 +902,7 @@ func syncGitHub() {
 func riskScore(v any) float64 {
  if v == nil { return 0 }
  s := strings.TrimSpace(fmt.Sprint(v))
- if m := regexp.MustCompile(`([0-9.]+)\\s*\\(([^)]+)\\)`).FindStringSubmatch(s); len(m) > 1 {
+ if m := regexp.MustCompile(`([0-9.]+)\s*\(([^)]+)\)`).FindStringSubmatch(s); len(m) > 1 {
   n, _ := strconv.ParseFloat(m[1], 64)
   return n
  }
@@ -846,9 +937,9 @@ func getIPRiskLevel(ip string) string {
 }
 
 func updateDNS(nodes []string, bw []BWResult, av map[string]AvailabilityResult, lat, httpLat, jitter, speed map[string]float64) {
- if !boolean("CF_ENABLED") { logf("Cloudflare DNS 批量更新未启用。\\n"); return }
+ if !boolean("CF_ENABLED") { logf("Cloudflare DNS 批量更新未启用。\n"); return }
  recordType := strings.ToUpper(str("DNS_RECORD_TYPE"))
- if recordType != "A" && recordType != "TXT" { logf("不支持的 DNS_RECORD_TYPE: %s，已跳过 DNS 更新。\\n", recordType); return }
+ if recordType != "A" && recordType != "TXT" { logf("不支持的 DNS_RECORD_TYPE: %s，已跳过 DNS 更新。\n", recordType); return }
  targetCount := integer("DNS_UPDATE_TARGET_COUNT")
  blockedSet := map[string]bool{}
  if boolean("FILTER_BLOCKED_COUNTRIES_ENABLED") {
@@ -913,11 +1004,11 @@ func updateDNS(nodes []string, bw []BWResult, av map[string]AvailabilityResult, 
   }
  }
  if len(content) == 0 {
-  logf("没有可用的 IP 用于 DNS 更新，跳过。\\n")
+  logf("没有可用的 IP 用于 DNS 更新，跳过。\n")
   notify("没有可用的 IP 用于 DNS 更新，跳过。", "DNS 更新跳过")
   return
  }
- logf("准备更新 Cloudflare DNS：%d 条记录，类型 %s\\n", len(content), recordType)
+ logf("准备更新 Cloudflare DNS：%d 条记录，类型 %s\n", len(content), recordType)
  headers := map[string]string{"Authorization": "Bearer " + str("CF_API_TOKEN"), "Content-Type": "application/json"}
  for attempt := 1; attempt <= integer("DNS_UPDATE_MAX_RETRIES"); attempt++ {
   base := "https://api.cloudflare.com/client/v4/zones/" + url.PathEscape(str("CF_ZONE_ID")) + "/dns_records"
@@ -941,13 +1032,13 @@ func updateDNS(nodes []string, bw []BWResult, av map[string]AvailabilityResult, 
     var batchResult map[string]any
     if batchErr == nil { _ = json.Unmarshal(batchBody, &batchResult) }
     if batchErr == nil && batchResp.StatusCode >= 200 && batchResp.StatusCode < 300 && batchResult["success"] == true {
-     logf("Cloudflare DNS 批量更新成功！共 %d 条记录。\\n", len(content))
+     logf("Cloudflare DNS 批量更新成功！共 %d 条记录。\n", len(content))
      return
     }
     if batchErr != nil { err = batchErr } else { err = fmt.Errorf("批量更新失败: HTTP %d", batchResp.StatusCode) }
    } else { err = errors.New("查询 DNS 记录失败") }
   } else if err == nil { err = fmt.Errorf("HTTP %d", resp.StatusCode) }
-  logf("[尝试 %d/%d] DNS 更新出错: %v\\n", attempt, integer("DNS_UPDATE_MAX_RETRIES"), err)
+  logf("[尝试 %d/%d] DNS 更新出错: %v\n", attempt, integer("DNS_UPDATE_MAX_RETRIES"), err)
   if attempt < integer("DNS_UPDATE_MAX_RETRIES") { sleepSec("DNS_UPDATE_RETRY_DELAY") }
  }
  notify("Cloudflare DNS 更新失败，请检查配置和网络。", "DNS 更新失败")
