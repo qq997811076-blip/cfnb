@@ -75,10 +75,10 @@ func main() {
 		req.MinSuccessRate = 1
 	}
 	if req.MaxWorkers < 1 {
-		req.MaxWorkers = 1000
+		req.MaxWorkers = 50
 	}
-	if req.MaxWorkers > 10000 {
-		req.MaxWorkers = 10000
+	if req.MaxWorkers > 50 {
+		req.MaxWorkers = 50
 	}
 	if len(req.Nodes) == 0 {
 		fmt.Print("[]")
