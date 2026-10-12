@@ -2,11 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseAdaptiveTextNodes(t *testing.T) {
@@ -187,5 +190,18 @@ func TestFallbackARecordContentKeepsAllUniqueFinalNodes(t *testing.T) {
  want := []string{"192.0.2.1", "192.0.2.2", "192.0.2.3"}
  if !reflect.DeepEqual(got, want) {
   t.Fatalf("fallbackARecordContent() = %#v, want %#v", got, want)
+ }
+}
+
+
+func TestRequestWithTotalTimeout(t *testing.T) {
+ server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+  time.Sleep(100 * time.Millisecond)
+  _, _ = w.Write([]byte("late"))
+ }))
+ defer server.Close()
+ _, _, err := requestWithTotalTimeout("GET", server.URL, nil, nil, time.Second, time.Second, 10*time.Millisecond)
+ if err == nil {
+  t.Fatal("requestWithTotalTimeout() succeeded despite total timeout")
  }
 }

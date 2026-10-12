@@ -641,6 +641,20 @@ func request(method, target string, headers map[string]string, body []byte, conn
  resp,e:=newHTTPClient(connect,read).Do(req);if e!=nil{return nil,nil,e}
  b,re:=io.ReadAll(resp.Body);resp.Body.Close();if re!=nil{return resp,b,re};return resp,b,nil
 }
+func requestWithTotalTimeout(method, target string, headers map[string]string, body []byte, connect, read, total time.Duration) (*http.Response, []byte, error) {
+ req, err := http.NewRequest(method, target, bytes.NewReader(body))
+ if err != nil { return nil, nil, err }
+ for key, value := range headers { req.Header.Set(key, value) }
+ client := *newHTTPClient(connect, read)
+ client.Timeout = total
+ resp, err := client.Do(req)
+ if err != nil { return nil, nil, err }
+ data, readErr := io.ReadAll(resp.Body)
+ _ = resp.Body.Close()
+ if readErr != nil { return resp, data, readErr }
+ return resp, data, nil
+}
+
 func requestNoRedirect(method, target string, headers map[string]string, body []byte, connect, read time.Duration) (*http.Response, []byte, error) {
  req, err := http.NewRequest(method, target, bytes.NewReader(body))
  if err != nil { return nil, nil, err }
@@ -844,7 +858,7 @@ func queryIPInfo(ip string, pool *ipInfoTokenPool) string {
   idx, state := pool.acquire()
   pool.rateLimit(state)
   target := "https://ipinfo.io/" + url.PathEscape(ip) + "/json?token=" + url.QueryEscape(state.token)
-  resp, body, err := request("GET", target, nil, nil, 5*time.Second, 5*time.Second)
+  resp, body, err := requestWithTotalTimeout("GET", target, nil, nil, 5*time.Second, 5*time.Second, 5*time.Second)
   if err != nil { pool.cool(idx, 300*time.Millisecond, false); continue }
   if resp.StatusCode == http.StatusTooManyRequests { pool.cool(idx, time.Second, false); continue }
   if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden { pool.cool(idx, 0, true); continue }
@@ -897,7 +911,7 @@ func calibrate(nodes []string) {
  if workers < 1 { workers = 1 }
  tokenOK := runPool(tokens, workers, func(t string) bool {
   u := "https://ipinfo.io/json?token=" + url.QueryEscape(t)
-  resp, b, e := request("GET", u, nil, nil, 5*time.Second, 5*time.Second)
+  resp, b, e := requestWithTotalTimeout("GET", u, nil, nil, 5*time.Second, 5*time.Second, 5*time.Second)
   if e != nil || resp.StatusCode != http.StatusOK { return false }
   var d map[string]any
   if json.Unmarshal(b, &d) != nil { return false }
