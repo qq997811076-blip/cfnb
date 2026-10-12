@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -91,6 +92,8 @@ func main() {
 
 	jobs := make(chan string)
 	results := make(chan Result, len(req.Nodes))
+	done := make(chan struct{}, len(req.Nodes))
+	var completed int64
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
@@ -100,6 +103,8 @@ func main() {
 				if result := testNode(node, time.Duration(req.Timeout*float64(time.Second)), req.Probes, req.MinSuccessRate); result != nil {
 					results <- *result
 				}
+				atomic.AddInt64(&completed, 1)
+				done <- struct{}{}
 			}
 		}()
 	}
@@ -110,12 +115,32 @@ func main() {
 		close(jobs)
 		wg.Wait()
 		close(results)
+		close(done)
 	}()
 
 	out := make([]Result, 0)
-	for result := range results {
-		out = append(out, result)
+	finished := 0
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for results != nil || done != nil {
+		select {
+		case result, ok := <-results:
+			if !ok {
+				results = nil
+				continue
+			}
+			out = append(out, result)
+		case _, ok := <-done:
+			if !ok {
+				done = nil
+				continue
+			}
+			finished++
+		case <-ticker.C:
+			fmt.Fprintf(os.Stderr, "TCP进度：%d/%d (%.1f%%)\n", atomic.LoadInt64(&completed), len(req.Nodes), float64(atomic.LoadInt64(&completed))*100/float64(len(req.Nodes)))
+		}
 	}
+	fmt.Fprintf(os.Stderr, "TCP进度：%d/%d (100.0%%)\n", finished, len(req.Nodes))
 	enc := json.NewEncoder(os.Stdout)
 	if err := enc.Encode(out); err != nil {
 		fmt.Fprintln(os.Stderr, "输出 TCP 测试结果失败:", err)
